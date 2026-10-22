@@ -16,7 +16,15 @@ function privateKey(): string {
     throw new Error('ENV_MISSING:GITHUB_APP_PRIVATE_KEY');
   }
   // Les secrets Supabase conservent souvent les \n littéraux.
-  return value.replace(/\\n/g, '\n');
+  const normalized = value.replace(/\\n/g, '\n');
+  // GitHub télécharge une clé PKCS#1 ; jose.importPKCS8 exige du PKCS#8.
+  if (!normalized.includes('BEGIN PRIVATE KEY')) {
+    throw new Error(
+      'GITHUB_APP_PRIVATE_KEY_FORMAT: convertir la clé PKCS#1 en PKCS#8 avec ' +
+        '`openssl pkcs8 -topk8 -nocrypt -in github-app.pem -out github-app-pkcs8.pem`',
+    );
+  }
+  return normalized;
 }
 
 async function createAppJwt(): Promise<string> {

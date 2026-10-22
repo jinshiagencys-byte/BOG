@@ -128,6 +128,15 @@ Secrets Edge à prévoir : `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`,
 `github_integrations` ; aucune clé privée ni token GitHub n'est en base.
 `github_integrations.workflow_file` vaut par défaut `antigravity-qa.yml`.
 
+La clé privée téléchargée depuis GitHub est au format PKCS#1 (`BEGIN RSA PRIVATE KEY`).
+`jose.importPKCS8` attend du PKCS#8 : la convertir avant de créer le secret Edge :
+
+```bash
+openssl pkcs8 -topk8 -nocrypt -in github-app.pem -out github-app-pkcs8.pem
+```
+
+Puis utiliser le contenu de `github-app-pkcs8.pem` pour `GITHUB_APP_PRIVATE_KEY`.
+
 ## Points de vigilance
 
 - `service_role` contourne la RLS : ne jamais l'exposer au navigateur.
