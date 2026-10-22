@@ -5,7 +5,7 @@
 @import 'tailwindcss';
 
 /* ------------------------------------------------------------
-   Design tokens (source de vérité : REVERSE-ENGINEERING.md)
+   Design tokens relevés sur app.testdino.com
    ------------------------------------------------------------ */
 :root {
   /* base neutre */

@@ -91,8 +91,8 @@ app/src/
 
 ## Fidélité
 
-Les tokens et composants proviennent de l'observation live du dashboard réel
-(voir `../REVERSE-ENGINEERING.md`). Valeurs vérifiées par styles calculés :
+Les tokens et composants proviennent de l'observation live du dashboard réel,
+avec des valeurs vérifiées par styles calculés :
 
 | Élément | Valeur |
 | --- | --- |
