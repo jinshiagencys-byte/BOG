@@ -137,6 +137,20 @@ openssl pkcs8 -topk8 -nocrypt -in github-app.pem -out github-app-pkcs8.pem
 
 Puis utiliser le contenu de `github-app-pkcs8.pem` pour `GITHUB_APP_PRIVATE_KEY`.
 
+## Suivre un run GitHub
+
+Le script `supabase/scripts/github-run-status.mjs` interroge l'API GitHub avec la GitHub App
+et affiche le statut global, les jobs et les étapes :
+
+```bash
+node supabase/scripts/github-run-status.mjs <run_id>
+node supabase/scripts/github-run-status.mjs <run_id> --watch
+```
+
+Il lit `supabase/.env.local`, ne révèle jamais la clé privée, et mappe les statuts GitHub
+vers les statuts produit (`running`, `passed`, `failed`, `cancelled`). Le navigateur ne
+doit jamais appeler GitHub directement : la clé privée reste côté serveur.
+
 ## Points de vigilance
 
 - `service_role` contourne la RLS : ne jamais l'exposer au navigateur.
