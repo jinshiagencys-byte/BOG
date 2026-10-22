@@ -1,0 +1,369 @@
+name: Antigravity QA — TestDino-like run
+
+# Exécution d'un run sélectionné depuis l'application.
+# Le moteur est un agent OpenCode + MCP chrome-devtools qui pilote Chrome.
+# Playwright n'est installé que pour les dépendances navigateur, pas comme runner.
+
+on:
+  workflow_dispatch:
+    inputs:
+      qa_run_id:
+        description: "ID du run Supabase (test_runs.id)"
+        required: true
+        type: string
+      manifest_url:
+        description: "URL de l'Edge Function run-manifest"
+        required: true
+        type: string
+      run_token:
+        description: "Jeton éphémère du run (x-run-token)"
+        required: true
+        type: string
+      report_url:
+        description: "URL de l'Edge Function report-run"
+        required: true
+        type: string
+      model:
+        description: "Modèle IA de l'agent"
+        required: false
+        default: "opencode:big-pickle"
+        type: string
+      target_url:
+        description: "URL cible (facultative, sinon lue dans le manifeste)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "22"
+  GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+  OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+
+jobs:
+  antigravity-qa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Installer Chromium et les dépendances système (Playwright n'est pas le runner)
+        run: |
+          npx playwright install --with-deps chromium
+
+      - name: Installer OpenCode CLI
+        run: |
+          npm install -g opencode-ai
+
+      - name: Récupérer le manifeste du run
+        env:
+          MANIFEST_URL: ${{ inputs.manifest_url }}
+          RUN_TOKEN: ${{ inputs.run_token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${MANIFEST_URL:?manifest_url requis}"
+          : "${RUN_TOKEN:?run_token requis}"
+          curl -fsS --retry 3 -H "x-run-token: $RUN_TOKEN" "$MANIFEST_URL" -o run_manifest.json
+          jq -e '.cases | type == "array" and length > 0' run_manifest.json >/dev/null
+
+      - name: Construire le prompt depuis le manifeste
+        id: prompt
+        env:
+          TARGET_URL_INPUT: ${{ inputs.target_url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET_URL=$(jq -r '.project.url // empty' run_manifest.json)
+          if [ -z "$TARGET_URL" ]; then
+            TARGET_URL="${TARGET_URL_INPUT:-}"
+          fi
+          if [ -z "$TARGET_URL" ]; then
+            echo "::error::URL cible absente du manifeste et des inputs"
+            exit 1
+          fi
+
+          jq -r '
+            .cases[] |
+            "\n\(.code) [\(
+               if ((.tags // []) | index("@security")) then "security"
+               elif ((.tags // []) | index("@a11y")) then "accessibility"
+               elif ((.tags // []) | index("@seo")) then "seo"
+               else "functional" end
+            )] \(.title)\n" +
+            ([.steps[] | "  \(.n). \(.action) | \(.expected)"] | join("\n"))
+          ' run_manifest.json > plan.txt
+
+          export TARGET_URL
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          tpl = Path('.github/qa/prompt.md').read_text(encoding='utf-8')
+          plan = Path('plan.txt').read_text(encoding='utf-8').strip()
+          prompt = tpl.replace('{{TARGET_URL}}', os.environ['TARGET_URL']).replace('{{PLAN}}', plan)
+          Path('qa_prompt.txt').write_text(prompt, encoding='utf-8')
+          PY
+
+          echo "target_url=$TARGET_URL" >> "$GITHUB_OUTPUT"
+          echo "Prompt QA : $(wc -c < qa_prompt.txt) caractères"
+
+      - name: Dossiers de preuves
+        run: |
+          mkdir -p trajectories videos screenshots
+
+      - name: Exécuter l'agent QA (chrome-devtools MCP)
+        id: qa_agent
+        env:
+          TARGET_URL: ${{ steps.prompt.outputs.target_url }}
+          AI_MODEL: ${{ inputs.model }}
+        shell: bash
+        run: |
+          set +e
+          rm -f qa_result.json qa_agent.log
+          echo "🎯 Cible : $TARGET_URL"
+          echo "🧠 Modèle IA : $AI_MODEL"
+
+          google-chrome-stable --headless --no-sandbox --disable-gpu \
+            --user-data-dir=/tmp/chrome-qa --remote-debugging-port=9222 "$TARGET_URL" &
+          CHROME_PID=$!
+
+          for i in $(seq 1 30); do
+            curl -fs http://127.0.0.1:9222/json/version >/dev/null && break
+            sleep 1
+          done
+          if curl -fs http://127.0.0.1:9222/json/version >/dev/null; then
+            echo "✓ Chrome DevTools prêt sur :9222"
+          else
+            echo "::warning::Chrome ne répond pas sur 9222 après 30 s"
+          fi
+
+          cat > opencode.json << 'EOF'
+          {
+            "$schema": "https://opencode.ai/config.json",
+            "mcp": {
+              "chrome-devtools": {
+                "type": "local",
+                "command": ["npx", "-y", "chrome-devtools-mcp@latest", "--browserUrl", "http://127.0.0.1:9222"],
+                "enabled": true
+              }
+            }
+          }
+          EOF
+          echo "🔌 MCP configurés :"
+          opencode mcp list 2>&1 | head -20 || true
+
+          case "$AI_MODEL" in
+            opencode:*) OC_MODEL="opencode/${AI_MODEL#opencode:}" ;;
+            gemini-*)   OC_MODEL="google/${AI_MODEL}" ;;
+            *)
+              echo "::warning::Modèle '$AI_MODEL' non pris en charge, repli sur opencode/big-pickle"
+              OC_MODEL="opencode/big-pickle"
+              ;;
+          esac
+          export GOOGLE_GENERATIVE_AI_API_KEY="${GOOGLE_API_KEY:-}"
+          echo "oc_model=$OC_MODEL" >> "$GITHUB_OUTPUT"
+          echo "🔧 Modèle opencode : $OC_MODEL"
+
+          QA_PROMPT=$(cat qa_prompt.txt)
+          printf '%s' "$QA_PROMPT" > trajectories/qa_prompt.txt
+          opencode run -m "$OC_MODEL" "$QA_PROMPT" 2>&1 | tee qa_agent.log
+          EXIT_CODE=${PIPESTATUS[0]}
+          kill $CHROME_PID 2>/dev/null || true
+          echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
+
+      - name: Valider et normaliser le rapport structuré
+        id: report
+        if: always()
+        shell: bash
+        run: |
+          set +e
+
+          [ -s qa_result.json ] || python3 - <<'PY'
+          import json
+          txt = open("qa_agent.log", encoding="utf-8", errors="ignore").read()
+          dec = json.JSONDecoder()
+          best = None
+          for i, ch in enumerate(txt):
+              if ch == "{":
+                  try:
+                      obj, _ = dec.raw_decode(txt[i:])
+                  except ValueError:
+                      continue
+                  if isinstance(obj, dict) and "test_cases" in obj:
+                      best = obj
+          if best:
+              json.dump(best, open("qa_result.json", "w"), ensure_ascii=False)
+          PY
+
+          if [ -s qa_result.json ]; then
+            jq '
+              .side_effects //= []
+              | .test_cases |= map(
+                  .discovered //= false
+                | .severity //= null
+                | .steps = ((.steps // []) | map(
+                    .n |= (if type == "string" then (tonumber? // .) else . end)
+                  | .precondition //= ""
+                  | .evidence //= {}
+                  | .evidence.url //= ""
+                  | .evidence.console //= ""
+                  | .evidence.network //= ""
+                  | .evidence.screenshot //= ""
+                  | .evidence.http_status |= (if type == "string" then (tonumber? // null) else . end)
+                  | .actual |= (if . == null or . == "" then "non renseigné" else . end)
+                  ))
+                )
+            ' qa_result.json > /tmp/qa_fixed.json \
+              && mv /tmp/qa_fixed.json qa_result.json \
+              || echo "::warning::Normalisation du JSON impossible (JSON illisible ?)"
+          fi
+
+          if jq -e '
+            (.test_cases | type == "array" and length > 0)
+            and (.side_effects | type == "array")
+            and ([.test_cases[].id] | length == (unique | length))
+            and all(.test_cases[];
+              (.id | type == "string" and length > 0)
+              and (.title | type == "string" and length > 0)
+              and (.category | . == "functional" or . == "security" or . == "accessibility" or . == "seo")
+              and (.discovered | type == "boolean")
+              and (.severity == null or .severity == "P0" or .severity == "P1" or .severity == "P2")
+              and (.steps | type == "array" and length > 0)
+              and ([.steps[].n] | length == (unique | length))
+              and all(.steps[];
+                (.n | type == "number")
+                and (.action | type == "string" and length > 0)
+                and (.precondition | type == "string")
+                and (.expected | type == "string" and length > 0)
+                and (.actual | type == "string" and length > 0)
+                and (.status | . == "passed" or . == "failed" or . == "blocked" or . == "skipped")
+                and (.evidence | type == "object")
+                and (.evidence.url | type == "string")
+                and (.evidence.http_status == null or (.evidence.http_status | type == "number"))
+                and (.evidence.console | type == "string")
+                and (.evidence.network | type == "string")
+                and (.evidence.screenshot | type == "string")
+                and (if .status == "failed"
+                     then ([.evidence.http_status, .evidence.console, .evidence.network, .evidence.screenshot]
+                           | any(.[]; . != null and . != ""))
+                     else true end)
+              )
+            )
+          ' qa_result.json >/dev/null 2>&1; then
+            cp qa_result.json trajectories/qa_result.raw.json
+            jq '
+              .test_cases |= map(
+                .steps = (.steps // [])
+                | .status = (
+                    if (.steps | length) == 0 then "blocked"
+                    elif any(.steps[]; .status == "failed") then "failed"
+                    elif any(.steps[]; .status == "blocked") then "blocked"
+                    elif all(.steps[]; .status == "skipped") then "skipped"
+                    else "passed" end)
+              )
+              | .summary = {
+                  passed:  ([.test_cases[] | select(.status == "passed")]  | length),
+                  failed:  ([.test_cases[] | select(.status == "failed")]  | length),
+                  blocked: ([.test_cases[] | select(.status == "blocked")] | length),
+                  skipped: ([.test_cases[] | select(.status == "skipped")] | length)
+                }
+            ' qa_result.json > trajectories/qa_result.json
+            echo "valid=true" >> "$GITHUB_OUTPUT"
+            jq -r '.summary | "✓ \(.passed) passed, \(.failed) failed, \(.blocked) blocked, \(.skipped) skipped"' trajectories/qa_result.json
+          else
+            echo "valid=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::qa_result.json absent, invalide ou incomplet"
+          fi
+
+      - name: Envoyer le rapport au run Supabase
+        if: always()
+        env:
+          REPORT_URL: ${{ inputs.report_url }}
+          RUN_TOKEN: ${{ inputs.run_token }}
+          QA_RUN_ID: ${{ inputs.qa_run_id }}
+          AI_MODEL: ${{ inputs.model }}
+          GH_RUN_ID: ${{ github.run_id }}
+          GH_RUN_ATTEMPT: ${{ github.run_attempt }}
+          GH_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          set +e
+          : "${REPORT_URL:?report_url requis}"
+          : "${RUN_TOKEN:?run_token requis}"
+          : "${QA_RUN_ID:?qa_run_id requis}"
+
+          if [ ! -s trajectories/qa_result.json ]; then
+            jq -n --arg model "$AI_MODEL" --arg run_url "$GH_RUN_URL" \
+              --arg run_id "$QA_RUN_ID" \
+              --argjson gh_run_id "$GH_RUN_ID" --argjson gh_run_attempt "$GH_RUN_ATTEMPT" \
+              '{run_id: $run_id, status: "error", model: $model, executor: "antigravity",
+                github_run_id: $gh_run_id, github_run_attempt: $gh_run_attempt,
+                github_run_url: $run_url,
+                error_message: "Rapport QA absent ou invalide",
+                cases: [], side_effects: []}' > report_payload.json
+          else
+            jq -n --slurpfile r trajectories/qa_result.json \
+              --arg model "$AI_MODEL" --arg run_url "$GH_RUN_URL" \
+              --arg run_id "$QA_RUN_ID" \
+              --argjson gh_run_id "$GH_RUN_ID" --argjson gh_run_attempt "$GH_RUN_ATTEMPT" \
+              '($r[0]) as $r |
+               {run_id: $run_id,
+                status: (if (($r.summary.failed // 0) > 0 or ($r.summary.blocked // 0) > 0) then "failed" else "passed" end),
+                model: $model,
+                executor: "antigravity",
+                github_run_id: $gh_run_id,
+                github_run_attempt: $gh_run_attempt,
+                github_run_url: $run_url,
+                side_effects: ($r.side_effects // []),
+                cases: ($r.test_cases | map({
+                  code: .id,
+                  status: .status,
+                  severity: .severity,
+                  discovered: .discovered,
+                  title: .title,
+                  category: .category,
+                  suite: null,
+                  description: "",
+                  steps: (.steps | map({
+                    n: .n,
+                    status: .status,
+                    actual: .actual,
+                    precondition: .precondition,
+                    action: .action,
+                    expected: .expected,
+                    evidence: .evidence
+                  }))
+                }))}' > report_payload.json
+          fi
+
+          HTTP=$(curl -sS -o /tmp/report_resp.txt -w "%{http_code}" \
+            -X POST "$REPORT_URL" \
+            -H "x-run-token: $RUN_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d @report_payload.json)
+          echo "report-run : HTTP $HTTP"
+          cat /tmp/report_resp.txt; echo
+          [ "$HTTP" -ge 200 ] && [ "$HTTP" -lt 300 ]
+
+      - name: Archiver les preuves QA
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-proofs-${{ inputs.qa_run_id }}
+          path: |
+            trajectories/
+            videos/
+            screenshots/
+            qa_agent.log
+            qa_result.json
+            run_manifest.json
+            plan.txt
+            report_payload.json
+          retention-days: 30

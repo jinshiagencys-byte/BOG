@@ -1,0 +1,396 @@
+/* ============================================================
+   TestDino-like — Tailwind v4 + design tokens extraits en direct
+   de app.testdino.com (thème clair). Thème sombre dérivé.
+   ============================================================ */
+@import 'tailwindcss';
+
+/* ------------------------------------------------------------
+   Design tokens (source de vérité : REVERSE-ENGINEERING.md)
+   ------------------------------------------------------------ */
+:root {
+  /* base neutre */
+  --background: 0 0% 97.5%;
+  --foreground: 0 0% 0%;
+
+  --card: 0 0% 100%;
+  --card-foreground: 0 0% 0%;
+
+  --popover: 0 0% 100%;
+  --popover-foreground: 0 0% 0%;
+
+  --primary: 0 0% 0%;
+  --primary-foreground: 0 0% 100%;
+
+  --secondary: 0 0% 92.1%;
+  --secondary-foreground: 0 0% 0%;
+
+  --muted: 0 0% 95%;
+  --muted-foreground: 0 0% 32.3%;
+
+  --accent: 0 0% 92.1%;
+  --accent-foreground: 0 0% 0%;
+
+  --destructive: 358 75% 60%;
+  --destructive-foreground: 0 0% 100%;
+
+  --border: 0 0% 85%;
+  --input: 0 0% 92.1%;
+  --ring: 0 0% 20%;
+
+  /* accent indigo de l'écran d'onboarding (focus des champs + sélection) */
+  --onb-accent: 243 75% 55%;
+
+  --radius: 0.625rem;
+
+  /* sidebar */
+  --sidebar: 0 0% 95.5%;
+  --sidebar-background: 0 0% 95.5%;
+  --sidebar-foreground: 240 5.3% 26.1%;
+  --sidebar-accent: 240 4.8% 90%;
+  --sidebar-accent-foreground: 240 5.9% 10%;
+  --sidebar-border: 220 13% 83%;
+  --sidebar-primary: 240 5.9% 10%;
+  --sidebar-primary-foreground: 0 0% 98%;
+  --sidebar-ring: 0 0% 20%;
+
+  /* statut des tests */
+  --passed: 152 60% 38%;
+  --passed-background: 152 40% 96%;
+  --passed-border: 152 35% 78%;
+  --passed-solid: 152 60% 38%;
+
+  --failed: 0 70% 50%;
+  --failed-background: 0 50% 96%;
+  --failed-border: 0 35% 80%;
+
+  --flaky: 40 75% 46%;
+  --flaky-background: 40 50% 95%;
+  --flaky-border: 40 40% 75%;
+  --flaky-solid: 40 75% 33%;
+
+  --skipped: 210 55% 48%;
+  --skipped-background: 210 40% 96%;
+  --skipped-border: 210 30% 76%;
+
+  /* résultats de test du produit (qa_result.json) */
+  --blocked: 32 90% 48%;
+  --blocked-background: 32 60% 95%;
+  --blocked-border: 32 45% 78%;
+
+  --interrupted: 220 20% 45%;
+  --interrupted-background: 220 18% 96%;
+  --interrupted-border: 220 15% 82%;
+
+  --incomplete: 315 24% 45%;
+  --incomplete-background: 315 30% 96%;
+  --incomplete-border: 315 22% 80%;
+  --incomplete-solid: 315 24% 42%;
+
+  --running: 221 83% 53%;
+
+  /* accents de couleur */
+  --blue-foreground: 220 55% 50%;
+  --blue-background: 220 40% 96%;
+  --blue-border: 220 35% 82%;
+
+  --cyan-foreground: 187 60% 42%;
+  --cyan-background: 185 40% 96%;
+  --cyan-border: 185 35% 74%;
+
+  --amber-foreground: 32 65% 40%;
+  --amber-background: 40 50% 94%;
+  --amber-border: 40 40% 74%;
+
+  --purple-foreground: 262 60% 52%;
+  --purple-background: 265 40% 96%;
+  --purple-border: 265 40% 76%;
+
+  --rose-foreground: 343 65% 52%;
+  --rose-background: 345 45% 96%;
+  --rose-border: 345 35% 80%;
+
+  --magenta-foreground: 318 60% 42%;
+  --magenta-background: 318 45% 96%;
+  --magenta-border: 318 35% 78%;
+
+  --olive-foreground: 70 50% 28%;
+  --olive-background: 70 35% 93%;
+  --olive-border: 70 30% 70%;
+
+  /* AI insights */
+  --ai: 220 55% 50%;
+  --ai-border: 260 45% 52%;
+  --ui-text: 37 45% 38%;
+  --ui-background: 48 60% 94%;
+  --ui-border: 50 50% 48%;
+
+  /* environnements */
+  --env-production: 0 84% 55%;
+  --env-staging: 27 87% 62%;
+  --env-development: 276 100% 96%;
+  --env-development-text: 276 45% 40%;
+  --env-testing: 215 19% 46%;
+  --env-unmapped: 0 0% 45%;
+
+  --font-sans: 'Geist', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+
+  --shadow-xs: 0px 1px 2px 0px #00000017;
+  --shadow-sm: 0px 1px 2px 0px #0000002e, 0px 1px 2px -1px #0000002e;
+  --shadow-md: 0px 1px 2px 0px #0000002e, 0px 2px 4px -1px #0000002e;
+  --shadow-lg: 0px 1px 2px 0px #0000002e, 0px 4px 6px -1px #0000002e;
+}
+
+.dark {
+  --background: 0 0% 7%;
+  --foreground: 0 0% 96%;
+
+  --card: 0 0% 9.5%;
+  --card-foreground: 0 0% 96%;
+
+  --popover: 0 0% 9.5%;
+  --popover-foreground: 0 0% 96%;
+
+  --primary: 0 0% 96%;
+  --primary-foreground: 0 0% 8%;
+
+  --secondary: 0 0% 16%;
+  --secondary-foreground: 0 0% 96%;
+
+  --muted: 0 0% 15%;
+  --muted-foreground: 0 0% 64%;
+
+  --accent: 0 0% 18%;
+  --accent-foreground: 0 0% 96%;
+
+  --destructive: 358 65% 52%;
+  --destructive-foreground: 0 0% 100%;
+
+  --border: 0 0% 20%;
+  --input: 0 0% 18%;
+  --ring: 0 0% 70%;
+
+  /* accent indigo de l'écran d'onboarding (focus des champs + sélection) */
+  --onb-accent: 248 90% 70%;
+
+  --sidebar: 0 0% 9%;
+  --sidebar-background: 0 0% 9%;
+  --sidebar-foreground: 0 0% 78%;
+  --sidebar-accent: 0 0% 16%;
+  --sidebar-accent-foreground: 0 0% 98%;
+  --sidebar-border: 0 0% 18%;
+  --sidebar-primary: 0 0% 96%;
+  --sidebar-primary-foreground: 0 0% 8%;
+  --sidebar-ring: 0 0% 70%;
+
+  --passed: 152 55% 52%;
+  --passed-background: 152 35% 14%;
+  --passed-border: 152 25% 26%;
+
+  --failed: 0 70% 62%;
+  --failed-background: 0 40% 15%;
+  --failed-border: 0 30% 28%;
+
+  --flaky: 40 75% 58%;
+  --flaky-background: 40 40% 15%;
+  --flaky-border: 40 30% 28%;
+
+  --skipped: 210 60% 62%;
+  --skipped-background: 210 35% 15%;
+  --skipped-border: 210 25% 28%;
+
+  --blocked: 32 85% 62%;
+  --blocked-background: 32 40% 15%;
+  --blocked-border: 32 30% 28%;
+
+  --interrupted: 220 25% 62%;
+  --interrupted-background: 220 18% 16%;
+  --interrupted-border: 220 15% 28%;
+
+  --incomplete: 315 35% 66%;
+  --incomplete-background: 315 25% 16%;
+  --incomplete-border: 315 20% 28%;
+
+  --running: 221 83% 63%;
+
+  --blue-foreground: 220 65% 68%;
+  --blue-background: 220 40% 16%;
+  --blue-border: 220 30% 30%;
+
+  --cyan-foreground: 187 60% 60%;
+  --cyan-background: 185 35% 15%;
+  --cyan-border: 185 28% 28%;
+
+  --amber-foreground: 40 80% 62%;
+  --amber-background: 40 40% 15%;
+  --amber-border: 40 30% 28%;
+
+  --purple-foreground: 265 65% 72%;
+  --purple-background: 265 35% 17%;
+  --purple-border: 265 30% 30%;
+
+  --rose-foreground: 345 65% 68%;
+  --rose-background: 345 35% 16%;
+  --rose-border: 345 28% 30%;
+
+  --magenta-foreground: 318 55% 68%;
+  --magenta-background: 318 35% 16%;
+  --magenta-border: 318 28% 30%;
+
+  --olive-foreground: 70 50% 62%;
+  --olive-background: 70 25% 15%;
+  --olive-border: 70 20% 28%;
+
+  --ai: 220 65% 68%;
+  --ai-border: 260 55% 66%;
+  --ui-text: 45 65% 70%;
+  --ui-background: 45 40% 16%;
+  --ui-border: 50 40% 40%;
+
+  --env-production: 0 75% 60%;
+  --env-staging: 27 85% 62%;
+  --env-development: 276 40% 22%;
+  --env-development-text: 276 70% 82%;
+  --env-testing: 215 20% 60%;
+  --env-unmapped: 0 0% 55%;
+}
+
+/* ------------------------------------------------------------
+   Exposition des tokens à Tailwind : bg-background, text-muted-foreground,
+   border-border, bg-passed-background, text-passed, …
+   ------------------------------------------------------------ */
+@theme inline {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+
+  --color-sidebar: hsl(var(--sidebar));
+  --color-sidebar-foreground: hsl(var(--sidebar-foreground));
+  --color-sidebar-accent: hsl(var(--sidebar-accent));
+  --color-sidebar-accent-foreground: hsl(var(--sidebar-accent-foreground));
+  --color-sidebar-border: hsl(var(--sidebar-border));
+
+  --color-passed: hsl(var(--passed));
+  --color-passed-background: hsl(var(--passed-background));
+  --color-passed-border: hsl(var(--passed-border));
+  --color-failed: hsl(var(--failed));
+  --color-failed-background: hsl(var(--failed-background));
+  --color-failed-border: hsl(var(--failed-border));
+  --color-flaky: hsl(var(--flaky));
+  --color-flaky-background: hsl(var(--flaky-background));
+  --color-flaky-border: hsl(var(--flaky-border));
+  --color-skipped: hsl(var(--skipped));
+  --color-skipped-background: hsl(var(--skipped-background));
+  --color-skipped-border: hsl(var(--skipped-border));
+  --color-blocked: hsl(var(--blocked));
+  --color-blocked-background: hsl(var(--blocked-background));
+  --color-blocked-border: hsl(var(--blocked-border));
+  --color-interrupted: hsl(var(--interrupted));
+  --color-interrupted-background: hsl(var(--interrupted-background));
+  --color-interrupted-border: hsl(var(--interrupted-border));
+  --color-incomplete: hsl(var(--incomplete));
+  --color-incomplete-background: hsl(var(--incomplete-background));
+  --color-incomplete-border: hsl(var(--incomplete-border));
+  --color-running: hsl(var(--running));
+
+  --color-blue-foreground: hsl(var(--blue-foreground));
+  --color-blue-background: hsl(var(--blue-background));
+  --color-blue-border: hsl(var(--blue-border));
+  --color-cyan-foreground: hsl(var(--cyan-foreground));
+  --color-cyan-background: hsl(var(--cyan-background));
+  --color-cyan-border: hsl(var(--cyan-border));
+  --color-amber-foreground: hsl(var(--amber-foreground));
+  --color-amber-background: hsl(var(--amber-background));
+  --color-amber-border: hsl(var(--amber-border));
+  --color-purple-foreground: hsl(var(--purple-foreground));
+  --color-purple-background: hsl(var(--purple-background));
+  --color-purple-border: hsl(var(--purple-border));
+  --color-rose-foreground: hsl(var(--rose-foreground));
+  --color-rose-background: hsl(var(--rose-background));
+  --color-rose-border: hsl(var(--rose-border));
+  --color-magenta-foreground: hsl(var(--magenta-foreground));
+  --color-magenta-background: hsl(var(--magenta-background));
+  --color-magenta-border: hsl(var(--magenta-border));
+  --color-olive-foreground: hsl(var(--olive-foreground));
+  --color-olive-background: hsl(var(--olive-background));
+  --color-olive-border: hsl(var(--olive-border));
+
+  --color-ai: hsl(var(--ai));
+  --color-ai-border: hsl(var(--ai-border));
+  --color-ui-text: hsl(var(--ui-text));
+  --color-ui-background: hsl(var(--ui-background));
+  --color-ui-border: hsl(var(--ui-border));
+
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 2px);
+}
+
+/* ------------------------------------------------------------
+   Base
+   ------------------------------------------------------------ */
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    margin: 0;
+  }
+
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: hsl(var(--border));
+    border-radius: 9999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground) / 0.5);
+  }
+
+  body,
+  .td-surface,
+  .td-border {
+    transition:
+      background-color 0.15s ease,
+      border-color 0.15s ease,
+      color 0.15s ease;
+  }
+}

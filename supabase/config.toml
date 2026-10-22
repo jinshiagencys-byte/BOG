@@ -1,0 +1,17 @@
+# Configuration Supabase CLI.
+# Le project_id local n'est pas le project-ref distant : lier le projet avec
+# `supabase link --project-ref <ref>` avant `supabase db push` / `functions deploy`.
+
+project_id = "monitoring-project"
+
+# start-run est appelé par le navigateur avec le JWT Supabase.
+[functions.start-run]
+verify_jwt = true
+
+# Ces deux functions sont appelées par GitHub Actions avec x-run-token,
+# pas avec un JWT Supabase : la vérification plateforme doit être désactivée.
+[functions.report-run]
+verify_jwt = false
+
+[functions.run-manifest]
+verify_jwt = false

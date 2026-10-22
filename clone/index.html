@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Test Runs · TestDino (clone)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/theme.css">
+<link rel="stylesheet" href="assets/css/app.css">
+<script>
+  // évite le flash de thème
+  (function () {
+    try {
+      var t = localStorage.getItem('td-theme');
+      if (!t) t = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      if (t === 'dark') document.documentElement.classList.add('dark');
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+<div id="td-app" class="td-app">
+
+  <!-- ===================== SIDEBAR ===================== -->
+  <aside class="td-sidebar" aria-label="Navigation">
+    <div class="td-sidebar-header">
+      <button class="td-org-btn" type="button">
+        <span class="td-org-avatar">D</span>
+        <span class="td-org-name">Demo Organization</span>
+        <i data-lucide="chevrons-up-down" class="td-chev"></i>
+      </button>
+      <button id="td-sidebar-mobile-close" class="td-iconbtn td-sidebar-mobile-close" type="button" aria-label="Fermer le menu">
+        <i data-lucide="x" class="td-ic-16"></i>
+      </button>
+    </div>
+
+    <nav id="td-nav" class="td-nav">
+      <div class="td-nav-group">
+        <div class="td-nav-label">Overview</div>
+        <a href="#"><i data-lucide="house"></i><span>Dashboard</span></a>
+        <a href="#"><i data-lucide="git-pull-request-arrow"></i><span>Pull Requests</span></a>
+      </div>
+      <div class="td-nav-group">
+        <div class="td-nav-label">Test Results</div>
+        <a href="#" class="is-active"><i data-lucide="list-checks"></i><span>Test Runs</span></a>
+        <a href="#"><i data-lucide="flask-conical"></i><span>Test Explorer</span></a>
+        <a href="#"><i data-lucide="shield-check"></i><span>Test Controls</span></a>
+      </div>
+      <div class="td-nav-group">
+        <div class="td-nav-label">Insights</div>
+        <a href="#"><i data-lucide="chart-line"></i><span>Analytics</span></a>
+        <a href="#" class="is-ai"><i data-lucide="sparkles"></i><span>AI Insights</span></a>
+      </div>
+      <div class="td-nav-group">
+        <div class="td-nav-label">Management</div>
+        <a href="#"><i data-lucide="clipboard-list"></i><span>Test Cases</span></a>
+        <a href="#"><i data-lucide="circle-play"></i><span>Test Execution</span></a>
+      </div>
+      <div class="td-nav-group">
+        <div class="td-nav-label">General</div>
+        <a href="#"><i data-lucide="settings"></i><span>Settings</span></a>
+      </div>
+    </nav>
+
+    <div class="td-sidebar-footer">
+      <button class="td-user-btn" type="button">
+        <span class="td-user-avatar">BA</span>
+        <span class="td-user-info">
+          <span class="td-user-name">bhavy207AB</span>
+          <span class="td-user-mail">bhavy@testdino.com</span>
+        </span>
+        <i data-lucide="chevrons-up-down" class="td-chev"></i>
+      </button>
+    </div>
+  </aside>
+  <div id="td-sidebar-backdrop" class="td-sidebar-backdrop"></div>
+
+  <!-- ===================== MAIN ===================== -->
+  <div class="td-main">
+    <header class="td-header">
+      <button id="td-sidebar-toggle" class="td-iconbtn" type="button" aria-label="Toggle Sidebar">
+        <i data-lucide="panel-left" class="td-ic-16"></i>
+      </button>
+      <div class="td-header-sep"></div>
+      <nav class="td-breadcrumb" aria-label="breadcrumb">
+        <i data-lucide="folder" class="td-ic-14"></i>
+        <a href="#">Demo Project</a>
+        <i data-lucide="chevron-right" class="td-ic-14"></i>
+        <span>Test Runs</span>
+      </nav>
+      <div class="td-header-spacer"></div>
+
+      <button id="td-search" class="td-search" type="button" aria-label="Rechercher">
+        <i data-lucide="search" class="td-ic-14"></i>
+        <span>Search TestDino...</span>
+        <span class="td-kbd">Ctrl K</span>
+      </button>
+
+      <button class="td-iconbtn" type="button" aria-label="Nouveautés">
+        <i data-lucide="rocket" class="td-ic-16"></i>
+        <span class="td-badge-count">3</span>
+      </button>
+      <button class="td-iconbtn" type="button" aria-label="Notifications">
+        <i data-lucide="bell" class="td-ic-16"></i>
+        <span class="td-dot-red"></span>
+      </button>
+      <button class="td-iconbtn" type="button" aria-label="Aide">
+        <i data-lucide="circle-help" class="td-ic-16"></i>
+      </button>
+      <button id="td-theme" class="td-iconbtn" type="button" aria-label="Changer de thème"></button>
+    </header>
+
+    <div class="td-banner">
+      <i data-lucide="info" class="td-ic-14"></i>
+      <span>You're viewing sample data in a read-only sandbox.</span>
+      <a href="#">Back to Agencys Organization</a>
+    </div>
+
+    <main class="td-scroll">
+      <div class="td-page-head">
+        <h1>Test Runs</h1>
+        <p>View and manage your test runs, filter by status, branch, environment and more.</p>
+      </div>
+
+      <!-- toolbar -->
+      <div class="td-toolbar">
+        <div class="td-filters">
+          <div class="td-filter-wrap">
+            <button id="f-period" class="td-filter" data-pop-trigger aria-controls="menu-period" aria-expanded="false" type="button">
+              <i data-lucide="calendar" class="td-ic-14"></i>
+              <span class="td-filter-label">Last 6 months</span>
+              <i data-lucide="chevron-down" class="td-ic-14"></i>
+            </button>
+            <div id="menu-period" class="td-pop"></div>
+          </div>
+
+          <div class="td-filter-wrap">
+            <button id="f-status" class="td-filter" data-pop-trigger aria-controls="menu-status" aria-expanded="false" type="button">
+              <i data-lucide="circle-dot" class="td-ic-14"></i><span>Status</span><i data-lucide="chevron-down" class="td-ic-14"></i>
+            </button>
+            <div id="menu-status" class="td-pop"></div>
+          </div>
+
+          <div class="td-filter-wrap">
+            <button id="f-branch" class="td-filter" data-pop-trigger aria-controls="menu-branch" aria-expanded="false" type="button">
+              <i data-lucide="git-branch" class="td-ic-14"></i><span>Branch</span><i data-lucide="chevron-down" class="td-ic-14"></i>
+            </button>
+            <div id="menu-branch" class="td-pop"></div>
+          </div>
+
+          <div class="td-filter-wrap">
+            <button id="f-tags" class="td-filter" data-pop-trigger aria-controls="menu-tags" aria-expanded="false" type="button">
+              <i data-lucide="tag" class="td-ic-14"></i><span>Tags</span><i data-lucide="chevron-down" class="td-ic-14"></i>
+            </button>
+            <div id="menu-tags" class="td-pop"></div>
+          </div>
+
+          <div class="td-filter-wrap">
+            <button id="f-more" class="td-filter" data-pop-trigger aria-controls="menu-more" aria-expanded="false" type="button">
+              <i data-lucide="sliders-horizontal" class="td-ic-14"></i><span>More filters</span>
+              <span class="td-filter-count"></span>
+              <i data-lucide="chevron-down" class="td-ic-14"></i>
+            </button>
+            <div id="menu-more" class="td-pop td-pop-wide"></div>
+          </div>
+        </div>
+
+        <div class="td-toolbar-right">
+          <span id="td-updated" class="td-updated">Last updated: Just now</span>
+          <button id="td-refresh" class="td-refresh" type="button"><i data-lucide="refresh-cw" class="td-ic-14"></i>Sync</button>
+        </div>
+      </div>
+
+      <!-- table -->
+      <div id="td-table-area" class="td-card-surface">
+        <div class="td-table-scroll">
+          <table class="td-table">
+            <thead>
+              <tr>
+                <th>Test Run</th>
+                <th>Commit</th>
+                <th>Branch &amp; Environment</th>
+                <th>Test Results</th>
+                <th>AI Insights</th>
+              </tr>
+            </thead>
+            <tbody id="td-tbody"></tbody>
+          </table>
+        </div>
+        <div id="td-cards" class="td-cards"></div>
+
+        <div class="td-table-foot">
+          <div class="td-page-info"><span id="td-page-info">Page 1 of 1</span> · <span id="td-total">0 total</span></div>
+          <div class="td-pager">
+            <select id="td-limit" aria-label="Lignes par page">
+              <option value="10">10 / page</option>
+              <option value="25">25 / page</option>
+              <option value="50">50 / page</option>
+            </select>
+            <button id="td-prev" type="button" aria-label="Page précédente"><i data-lucide="chevron-left" class="td-ic-14"></i></button>
+            <button id="td-next" type="button" aria-label="Page suivante"><i data-lucide="chevron-right" class="td-ic-14"></i></button>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<!-- ===================== DRAWER (détail run) ===================== -->
+<div id="td-backdrop" class="td-backdrop"></div>
+<aside id="td-drawer" class="td-drawer" aria-hidden="true" aria-label="Détail du run">
+  <button id="td-drawer-close" class="td-iconbtn td-drawer-close" type="button" aria-label="Fermer">
+    <i data-lucide="x" class="td-ic-16"></i>
+  </button>
+  <div id="td-drawer-body" class="td-drawer-body"></div>
+</aside>
+
+<!-- ===================== COMMAND PALETTE ===================== -->
+<div id="td-palette" class="td-palette">
+  <div class="td-palette-box" role="dialog" aria-label="Recherche">
+    <div class="td-palette-inputwrap">
+      <i data-lucide="search" class="td-ic-16"></i>
+      <input id="td-palette-input" type="text" placeholder="Search TestDino..." autocomplete="off">
+    </div>
+    <div id="td-palette-results" class="td-palette-results"></div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+<script src="assets/js/data.js"></script>
+<script src="assets/js/app.js"></script>
+</body>
+</html>

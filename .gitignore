@@ -1,0 +1,27 @@
+# Dépendances et builds
+node_modules/
+dist/
+dist-ssr/
+
+# Secrets locaux — ne jamais committer
+.env
+.env.*
+!.env.example
+supabase/.env
+supabase/.env.*
+!supabase/.env.example
+*.pem
+*.key
+*.p8
+
+# Métadonnées locales de la CLI Supabase
+supabase/.temp/
+supabase/.branches/
+.supabase/
+
+# Sauvegardes locales de la base
+backups/
+
+# Divers
+.DS_Store
+*.log
