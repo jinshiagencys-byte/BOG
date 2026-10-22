@@ -119,8 +119,7 @@ Fichiers écrits (à déployer avec `supabase functions deploy`) :
   authentifié par `x-run-token`.
 
 Le workflow clone est `.github/workflows/antigravity-qa.yml` ; le prompt de l'agent est
-dans `.github/qa/prompt.md` (le plan est injecté depuis le manifeste). Le fichier
-`Antigravity (3).yml` reste la référence du workflow de monitoring d'origine.
+dans `.github/qa/prompt.md` (le plan est injecté depuis le manifeste).
 
 Secrets Edge à prévoir : `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`,
 `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (fournis par Supabase), et éventuellement

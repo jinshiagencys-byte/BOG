@@ -15,9 +15,8 @@ Clone **fidèle et responsive** de l'UI réelle de `app.testdino.com`, reconstru
 La sidebar ne reprend que les entrées utiles : **Dashboard**, **Test Runs**,
 **Test Cases** et **Settings** (ce dernier affiche un écran « à venir »).
 
-> **Document d’architecture** : [`docs/architecture-logicielle.md`](../docs/architecture-logicielle.md)
-> décrit l’architecture cible V2 (Supabase + GitHub Actions), les modules, le modèle de
-> données, la sécurité et le déploiement.
+> **Architecture V2** : voir [`supabase/README.md`](../supabase/README.md) pour les
+> migrations, les Edge Functions, la sécurité et le workflow GitHub Actions.
 
 Comme sur le vrai site, les URLs d'un projet sont **préfixées par son slug** :
 `/DemoProject/dashboard`, `/DemoProject/test-runs`, … Les anciennes URLs à plat
@@ -470,7 +469,7 @@ Le menu se ferme au clic extérieur et avec `Échap`.
 
 ## Mapping futur avec l'agent QA
 
-Le `qa_result.json` du workflow (`Antigravity (3).yml`) contient
+Le `qa_result.json` du workflow (`.github/workflows/antigravity-qa.yml`) contient
 `test_cases[]` avec `status` ∈ `passed | failed | blocked | skipped`, `evidence`,
 `side_effects`, `summary`. Il se branche naturellement sur :
 
