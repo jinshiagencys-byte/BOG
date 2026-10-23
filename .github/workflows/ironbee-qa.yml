@@ -82,17 +82,6 @@ jobs:
           test -s dist/cli/main.js
           echo "✓ IronBee $(node dist/cli/main.js --version 2>/dev/null || echo 'build ok')"
 
-      - name: Vérifier le secret OpenRouter
-        shell: bash
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-        run: |
-          set -euo pipefail
-          if [ -z "${OPENROUTER_API_KEY:-}" ]; then
-            echo "::error::Le secret OPENROUTER_API_KEY est absent du dépôt."
-            exit 1
-          fi
-
       - name: Récupérer le manifeste du run
         env:
           MANIFEST_URL: ${{ inputs.manifest_url }}
@@ -105,6 +94,39 @@ jobs:
           curl -fsS --retry 5 --retry-delay 5 \
             -H "x-run-token: $RUN_TOKEN" "$MANIFEST_URL" -o run_manifest.json
           jq -e '.cases | type == "array" and length > 0' run_manifest.json >/dev/null
+
+      - name: Charger la clé OpenRouter
+        shell: bash
+        env:
+          GITHUB_OPENROUTER_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          MANIFEST_URL: ${{ inputs.manifest_url }}
+          RUN_TOKEN: ${{ inputs.run_token }}
+          QA_RUN_ID: ${{ inputs.qa_run_id }}
+        run: |
+          set -euo pipefail
+          if [ -n "${GITHUB_OPENROUTER_KEY:-}" ]; then
+            KEY="$GITHUB_OPENROUTER_KEY"
+            echo "✓ Clé OpenRouter lue depuis le secret GitHub"
+          else
+            # Repli autonome : la clé reste côté Supabase et n'est remise
+            # qu'au workflow porteur du jeton de run, jamais au navigateur.
+            CREDENTIALS_URL=$(printf '%s' "$MANIFEST_URL" | sed 's#/run-manifest.*#/qa-credentials#')
+            RESP=$(curl -fsS --retry 3 --retry-delay 2 \
+              -H "x-run-token: $RUN_TOKEN" \
+              "$CREDENTIALS_URL?run_id=$QA_RUN_ID")
+            KEY=$(printf '%s' "$RESP" | jq -r '.openrouter_api_key // empty')
+            if [ -z "$KEY" ]; then
+              echo "::error::qa-credentials n'a pas renvoyé de clé OpenRouter"
+              exit 1
+            fi
+            echo "✓ Clé OpenRouter lue depuis qa-credentials"
+          fi
+          echo "::add-mask::$KEY"
+          {
+            echo "OPENROUTER_API_KEY<<EOF"
+            printf '%s\n' "$KEY"
+            echo "EOF"
+          } >> "$GITHUB_ENV"
 
       - name: Déterminer l'URL cible
         id: target
@@ -126,7 +148,6 @@ jobs:
       - name: Exécuter les cas avec IronBee
         id: qa
         env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           IRONBEE_DIR: ${{ github.workspace }}/_ironbee
           RUN_MANIFEST: ${{ github.workspace }}/run_manifest.json
           QA_OUTPUT: ${{ github.workspace }}/qa_result.json
