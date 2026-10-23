@@ -13,6 +13,7 @@ type StartRunBody = {
   prNumber?: number | null;
   tags?: string[];
   model?: string;
+  executor?: string;
 };
 
 const VALID_TRIGGERS = new Set(['manual', 'schedule', 'new_site', 'ci']);
@@ -158,21 +159,29 @@ Deno.serve(async (req) => {
     ?? configuredModel
     ?? 'big-pickle';
 
+  // IronBee est l'exécuteur par défaut. Antigravity reste disponible en
+  // fallback explicite pendant la transition.
+  const executor = body.executor === 'antigravity' ? 'antigravity' : 'ironbee';
+  const workflowFile = executor === 'ironbee'
+    ? 'ironbee-qa.yml'
+    : integration.workflow_file || 'antigravity-qa.yml';
+  const inputs: Record<string, string> = {
+    qa_run_id: runId,
+    manifest_url: manifestUrl,
+    run_token: runToken,
+    report_url: reportUrl,
+    target_url: site.site_url ?? '',
+  };
+  if (executor === 'antigravity') inputs.model = model;
+
   try {
     const githubToken = await installationToken(Number(integration.installation_id));
     await dispatchWorkflow({
       token: githubToken,
       repoFullName: integration.repo_full_name,
-      workflowFile: integration.workflow_file || 'antigravity-qa.yml',
+      workflowFile,
       ref: integration.default_branch || 'main',
-      inputs: {
-        qa_run_id: runId,
-        manifest_url: manifestUrl,
-        run_token: runToken,
-        report_url: reportUrl,
-        model,
-        target_url: site.site_url ?? '',
-      },
+      inputs,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

@@ -1,0 +1,40 @@
+{
+  "TC-ECOM-001": {
+    "url": "https://odjafrik.com",
+    "goal": "Type \"Agonlin\" into the header search field labelled \"Rechercher des produits, fournisseurs...\", then press Enter exactly once. Stop immediately after the results page shows the products. Do not click the search button or any other control.",
+    "expect": {
+      "url": "/products\\?search=Agonlin",
+      "text": ["[1-9]\\d* produits? trouvés", "Les merveilles d.*Agonlin"],
+      "failIfText": ["Aucun produit trouvé", "0 produits trouvés"],
+      "console": "fail"
+    }
+  },
+  "TC-ECOM-002": {
+    "url": "https://odjafrik.com/products?category=426a089f-f00c-41f2-8a34-a74a82eafbbd",
+    "goal": "Confirm the category page lists at least one product. Stop immediately after confirming; do not click anything.",
+    "expect": {
+      "url": "/products\\?category=426a089f",
+      "text": ["[1-9]\\d* produits? trouvés", "FCFA"],
+      "failIfText": ["Aucun produit trouvé", "0 produits trouvés"],
+      "console": "fail"
+    }
+  },
+  "TC-ECOM-003": {
+    "url": "https://odjafrik.com/product/35634176-4386-440f-9708-af9bfd1caac7",
+    "goal": "Confirm the product page shows the product name, price and stock status. Then reload the page and confirm it still shows the same information. Stop after the reload.",
+    "expect": {
+      "url": "/product/35634176-4386-440f-9708-af9bfd1caac7",
+      "text": ["Les merveilles d.*Agonlin", "15,000 FCFA", "En stock - \\d+ unités"],
+      "console": "fail"
+    }
+  },
+  "TC-ECOM-004": {
+    "url": "https://odjafrik.com/product/35634176-4386-440f-9708-af9bfd1caac7",
+    "goal": "Add one unit of the product \"Les merveilles d’Agonlin Long grain\" to the cart, then open the cart and confirm the product is listed. Stop when the cart shows the product. Do not log in or proceed to checkout.",
+    "expect": {
+      "url": "/cart",
+      "text": ["Les merveilles d.*Agonlin", "15,000 FCFA", "1 article"],
+      "console": "warn"
+    }
+  }
+}

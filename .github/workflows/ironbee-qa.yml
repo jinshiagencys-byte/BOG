@@ -1,0 +1,163 @@
+name: IronBee QA — TestDino-like run
+
+# Exécution d'un run sélectionné depuis l'application.
+# IronBee Express pilote un Chrome réel et Jev prend les décisions via
+# l'endpoint OpenRouter compatible TypeSafe. Le runner du dépôt garde la
+# propriété des assertions : le verdict d'IronBee ne suffit pas à valider un cas.
+
+on:
+  workflow_dispatch:
+    inputs:
+      qa_run_id:
+        description: "ID du run Supabase (test_runs.id)"
+        required: true
+        type: string
+      manifest_url:
+        description: "URL de l'Edge Function run-manifest"
+        required: true
+        type: string
+      run_token:
+        description: "Jeton éphémère du run (x-run-token)"
+        required: true
+        type: string
+      report_url:
+        description: "URL de l'Edge Function report-run"
+        required: true
+        type: string
+      target_url:
+        description: "URL cible (facultative, sinon lue dans le manifeste)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ironbee-qa-${{ inputs.qa_run_id }}
+  cancel-in-progress: false
+
+jobs:
+  ironbee-qa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Installer Google Chrome
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v google-chrome >/dev/null 2>&1 \
+            && ! command -v google-chrome-stable >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y wget ca-certificates
+            wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
+              -O /tmp/google-chrome.deb
+            sudo apt-get install -y /tmp/google-chrome.deb
+          fi
+          if command -v google-chrome >/dev/null 2>&1; then
+            google-chrome --version
+          else
+            google-chrome-stable --version
+          fi
+
+      - name: Construire IronBee Express
+        shell: bash
+        env:
+          PATCHRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+        run: |
+          set -euo pipefail
+          rm -rf _ironbee
+          git clone --depth 1 https://github.com/ironbee-ai/ironbee-express.git _ironbee
+          cd _ironbee
+          npm ci --no-audit --no-fund
+          npm run build
+          test -s dist/cli/main.js
+          echo "✓ IronBee $(node dist/cli/main.js --version 2>/dev/null || echo 'build ok')"
+
+      - name: Vérifier le secret OpenRouter
+        shell: bash
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OPENROUTER_API_KEY:-}" ]; then
+            echo "::error::Le secret OPENROUTER_API_KEY est absent du dépôt."
+            exit 1
+          fi
+
+      - name: Récupérer le manifeste du run
+        env:
+          MANIFEST_URL: ${{ inputs.manifest_url }}
+          RUN_TOKEN: ${{ inputs.run_token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${MANIFEST_URL:?manifest_url requis}"
+          : "${RUN_TOKEN:?run_token requis}"
+          curl -fsS --retry 5 --retry-delay 5 \
+            -H "x-run-token: $RUN_TOKEN" "$MANIFEST_URL" -o run_manifest.json
+          jq -e '.cases | type == "array" and length > 0' run_manifest.json >/dev/null
+
+      - name: Déterminer l'URL cible
+        id: target
+        env:
+          TARGET_URL_INPUT: ${{ inputs.target_url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET_URL=$(jq -r '.project.url // empty' run_manifest.json)
+          if [ -z "$TARGET_URL" ]; then TARGET_URL="${TARGET_URL_INPUT:-}"; fi
+          if [ -z "$TARGET_URL" ]; then
+            echo "::error::URL cible absente du manifeste et des inputs"
+            exit 1
+          fi
+          echo "url=$TARGET_URL" >> "$GITHUB_OUTPUT"
+          echo "🎯 Cible : $TARGET_URL"
+          echo "🧪 Cas : $(jq '.cases | length' run_manifest.json)"
+
+      - name: Exécuter les cas avec IronBee
+        id: qa
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          IRONBEE_DIR: ${{ github.workspace }}/_ironbee
+          RUN_MANIFEST: ${{ github.workspace }}/run_manifest.json
+          QA_OUTPUT: ${{ github.workspace }}/qa_result.json
+          QA_CACHE_DIR: ${{ github.workspace }}/.qa-cache
+          TARGET_URL: ${{ steps.target.outputs.url }}
+          QA_RUN_ID: ${{ inputs.qa_run_id }}
+          REPORT_URL: ${{ inputs.report_url }}
+          RUN_TOKEN: ${{ inputs.run_token }}
+          IRONBEE_CASE_TIMEOUT_MS: "300000"
+          IRONBEE_DELAY_MS: "6000"
+          IRONBEE_RETRIES: "2"
+          IRONBEE_RETRY_DELAY_MS: "60000"
+          GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          set +e
+          node .github/qa/ironbee-runner.mjs
+          CODE=$?
+          echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
+          if [ "$CODE" -ne 0 ]; then
+            echo "::warning::Le runner IronBee s'est terminé avec le code $CODE"
+          fi
+
+      - name: Archiver les preuves QA
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ironbee-qa-${{ inputs.qa_run_id }}
+          path: |
+            qa_result.json
+            run_manifest.json
+            .qa-cache/
+          if-no-files-found: warn
+          retention-days: 30
