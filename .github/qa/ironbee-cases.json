@@ -1,4 +1,30 @@
 {
+  "TC-101": {
+    "url": "https://odjafrik.com/nonexistent-page-xyz",
+    "goal": "Open https://odjafrik.com/nonexistent-page-xyz and stop. Do not navigate elsewhere. Report the final URL and whether the page explicitly shows a 404 or an equivalent \"page introuvable\" message.",
+    "label": "une page d'erreur 404 explicite",
+    "probeUrl": "https://odjafrik.com/nonexistent-page-xyz",
+    "perf": { "maxContentMs": 5000, "maxWaitMs": 15000 },
+    "expect": {
+      "url": "",
+      "text": ["404|page introuvable|introuvable|n'existe pas|not found"],
+      "failIfText": [],
+      "console": "warn"
+    }
+  },
+  "TC-103": {
+    "url": "https://odjafrik.com/products",
+    "goal": "Open https://odjafrik.com/products, wait until the product list is visible, then reload the page once and stop. Do not apply filters and do not click a product. Report the number of products displayed before and after reload.",
+    "label": "au moins un produit dans le catalogue",
+    "probeUrl": "https://odjafrik.com/products",
+    "perf": { "maxContentMs": 5000, "maxWaitMs": 15000 },
+    "expect": {
+      "url": "/products",
+      "text": ["[1-9]\\d* produits? trouvés"],
+      "failIfText": ["Aucun produit trouvé", "0 produits trouvés"],
+      "console": "warn"
+    }
+  },
   "TC-ECOM-001": {
     "url": "https://odjafrik.com",
     "goal": "Type \"Agonlin\" into the header search field labelled \"Rechercher des produits, fournisseurs...\", then press Enter exactly once. Stop immediately after the results page shows the products. Do not click the search button or any other control.",
