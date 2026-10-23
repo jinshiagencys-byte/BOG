@@ -31,8 +31,10 @@ function Section({ title, open, onToggle, action, children }) {
 }
 
 function toGherkin(item) {
-  const given = item.preconditions[0] || 'l’application est prête'
-  const body = item.steps.map((s) => `    Quand ${s.action}\n    Alors ${s.expected}`).join('\n')
+  const given = (item.preconditions || [])[0] || 'l’application est prête'
+  const body = (item.steps || [])
+    .map((s) => `    Quand ${s.action}\n    Alors ${s.expected}`)
+    .join('\n')
   return `Fonctionnalité : ${item.title}\n\n  Scénario : Vérification standard\n    Étant donné ${given}\n${body}`
 }
 
@@ -46,6 +48,7 @@ export default function CaseDrawer({ item, index, total, onClose, onPrev, onNext
 
   const toggle = (key) => setOpen((o) => ({ ...o, [key]: !o[key] }))
   const isOpen = Boolean(item)
+  const displayId = item ? item.code || item.id : ''
 
   // un brouillon n'appartient qu'au cas où il a été ouvert : il disparaît
   // automatiquement quand on passe au cas précédent/suivant.
@@ -69,7 +72,7 @@ export default function CaseDrawer({ item, index, total, onClose, onPrev, onNext
           { action: draft.action.trim(), expected: draft.expected.trim() || '—' },
         ],
       },
-      `Étape ${item.steps.length + 1} ajoutée à ${item.id}.`,
+      `Étape ${item.steps.length + 1} ajoutée à ${displayId}.`,
     )
     setDraft(null)
   }
@@ -104,7 +107,11 @@ export default function CaseDrawer({ item, index, total, onClose, onPrev, onNext
       {
         steps: item.steps.map((s, idx) =>
           idx === stepEdit.index
-            ? { action: stepEdit.action.trim(), expected: stepEdit.expected.trim() || '—' }
+            ? {
+                ...s,
+                action: stepEdit.action.trim(),
+                expected: stepEdit.expected.trim() || '—',
+              }
             : s,
         ),
       },
@@ -116,7 +123,7 @@ export default function CaseDrawer({ item, index, total, onClose, onPrev, onNext
   const removeStep = (i) => {
     onChange(
       { steps: item.steps.filter((_, idx) => idx !== i) },
-      `Étape ${i + 1} supprimée de ${item.id}.`,
+      `Étape ${i + 1} supprimée de ${displayId}.`,
     )
     if (stepEdit?.index === i) setStepEdit(null)
   }
@@ -140,7 +147,7 @@ export default function CaseDrawer({ item, index, total, onClose, onPrev, onNext
           <Icon name="folder" className="td-ic-14 shrink-0 text-muted-foreground" />
           <span className="td-tc-crumb-suite">{item ? item.suite : ''}</span>
           <span className="text-border">/</span>
-          <span className="td-tc-crumb-id">{item ? item.id : ''}</span>
+          <span className="td-tc-crumb-id">{displayId}</span>
           <Icon name="link" className="td-ic-12 shrink-0 text-muted-foreground" />
         </div>
 

@@ -2,8 +2,14 @@
 // Les paramètres de suivi sont enregistrés avec le projet.
 import { useState } from 'react'
 import { PROJECT_CATEGORIES } from '../app/projects.js'
+import { messageForError } from '../lib/api.js'
 
-export default function CreateProjectModal({ project, onClose, onSubmit }) {
+export default function CreateProjectModal({
+  project,
+  onClose,
+  onSubmit,
+  submitting = false,
+}) {
   const editing = Boolean(project)
   const [name, setName] = useState(project ? project.name : '')
   const [category, setCategory] = useState(project ? project.category || '' : '')
@@ -11,13 +17,14 @@ export default function CreateProjectModal({ project, onClose, onSubmit }) {
   const [clientName, setClientName] = useState(project ? project.clientName || '' : '')
   const [url, setUrl] = useState(project ? project.url || '' : '')
   const [assignee, setAssignee] = useState(project ? project.assignee || '' : '')
-  const [frequency, setFrequency] = useState(project ? project.frequency || '' : '')
+  const [frequency, setFrequency] = useState(project ? project.frequency || '' : 24)
   const [notificationFrequency, setNotificationFrequency] = useState(
-    project ? project.notificationFrequency || '' : '',
+    project ? project.notificationFrequency || '' : 12,
   )
   const [error, setError] = useState('')
 
-  const submit = () => {
+  const submit = async () => {
+    if (submitting) return
     if (!name.trim()) {
       setError('Veuillez saisir un nom de projet.')
       return
@@ -46,16 +53,21 @@ export default function CreateProjectModal({ project, onClose, onSubmit }) {
       setError('Veuillez saisir un nombre entier positif pour chaque fréquence.')
       return
     }
-    onSubmit({
-      name: name.trim(),
-      category,
-      description: description.trim(),
-      clientName: clientName.trim(),
-      url: url.trim(),
-      assignee: assignee.trim(),
-      frequency: Number(frequency),
-      notificationFrequency: Number(notificationFrequency),
-    })
+    setError('')
+    try {
+      await onSubmit({
+        name: name.trim(),
+        category,
+        description: description.trim(),
+        clientName: clientName.trim(),
+        url: url.trim(),
+        assignee: assignee.trim(),
+        frequency: Number(frequency),
+        notificationFrequency: Number(notificationFrequency),
+      })
+    } catch (submitError) {
+      setError(messageForError(submitError))
+    }
   }
 
   const updateField = (setter) => (event) => {
@@ -70,7 +82,12 @@ export default function CreateProjectModal({ project, onClose, onSubmit }) {
       aria-modal="true"
       aria-label={editing ? 'Modifier le projet' : 'Créer un projet'}
     >
-      <div className="td-modal-backdrop" onClick={onClose} />
+      <div
+        className="td-modal-backdrop"
+        onClick={() => {
+          if (!submitting) onClose()
+        }}
+      />
 
       <div className="td-modal-box is-narrow">
         <div className="td-modal-head">
@@ -91,6 +108,7 @@ export default function CreateProjectModal({ project, onClose, onSubmit }) {
               value={name}
               aria-invalid={!name.trim() && Boolean(error)}
               onChange={updateField(setName)}
+              disabled={submitting}
             />
           </label>
 
@@ -104,6 +122,7 @@ export default function CreateProjectModal({ project, onClose, onSubmit }) {
                 value={category}
                 aria-invalid={!category.trim() && Boolean(error)}
                 onChange={updateField(setCategory)}
+                disabled={submitting}
               >
                 <option value="">Sélectionner…</option>
                 {PROJECT_CATEGORIES.map((c) => (
@@ -112,6 +131,11 @@ export default function CreateProjectModal({ project, onClose, onSubmit }) {
                   </option>
                 ))}
               </select>
+              <span className="td-field-hint">
+                {editing
+                  ? 'Le pack de cas existant n’est pas remplacé lors d’une modification.'
+                  : 'Le serveur génère automatiquement le pack de cas correspondant.'}
+              </span>
             </label>
 
             <label className="td-field">
@@ -123,6 +147,7 @@ export default function CreateProjectModal({ project, onClose, onSubmit }) {
                 placeholder="Ex. : Acme"
                 value={clientName}
                 onChange={updateField(setClientName)}
+                disabled={submitting}
               />
             </label>
           </div>
@@ -137,6 +162,7 @@ export default function CreateProjectModal({ project, onClose, onSubmit }) {
               placeholder="https://..."
               value={url}
               onChange={updateField(setUrl)}
+              disabled={submitting}
             />
           </label>
 
@@ -149,6 +175,7 @@ export default function CreateProjectModal({ project, onClose, onSubmit }) {
               placeholder="Ex. : Jean Dupont"
               value={assignee}
               onChange={updateField(setAssignee)}
+              disabled={submitting}
             />
           </label>
 
@@ -165,6 +192,7 @@ export default function CreateProjectModal({ project, onClose, onSubmit }) {
                 placeholder="Ex. : 24"
                 value={frequency}
                 onChange={updateField(setFrequency)}
+                disabled={submitting}
               />
             </label>
 
@@ -180,6 +208,7 @@ export default function CreateProjectModal({ project, onClose, onSubmit }) {
                 placeholder="Ex. : 12"
                 value={notificationFrequency}
                 onChange={updateField(setNotificationFrequency)}
+                disabled={submitting}
               />
             </label>
           </div>
@@ -192,6 +221,7 @@ export default function CreateProjectModal({ project, onClose, onSubmit }) {
               placeholder="Ex. : Tests de bout en bout du parcours de commande"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
+              disabled={submitting}
             />
           </label>
 
@@ -203,11 +233,22 @@ export default function CreateProjectModal({ project, onClose, onSubmit }) {
         </div>
 
         <div className="td-modal-foot">
-          <button type="button" className="td-btn" onClick={onClose}>
+          <button type="button" className="td-btn" onClick={onClose} disabled={submitting}>
             Annuler
           </button>
-          <button type="button" className="td-btn td-btn-primary" onClick={submit}>
-            {editing ? 'Enregistrer les modifications' : 'Créer le projet'}
+          <button
+            type="button"
+            className="td-btn td-btn-primary"
+            onClick={submit}
+            disabled={submitting}
+          >
+            {submitting
+              ? editing
+                ? 'Enregistrement…'
+                : 'Création…'
+              : editing
+                ? 'Enregistrer les modifications'
+                : 'Créer le projet'}
           </button>
         </div>
       </div>

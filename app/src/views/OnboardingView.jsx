@@ -8,15 +8,20 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import Icon from '../components/Icon.jsx'
 import { useApp } from '../app/app-context.js'
+import { useAuth } from '../app/auth-context.js'
+import { createOrganization, messageForError } from '../lib/api.js'
 
 // Tailles d'équipe : ce sont les 6 valeurs affichées sur le site réel.
 const TEAM_SIZES = ['1', '2-10', '11-50', '51-100', '101-250', '250+']
 
 export default function OnboardingView() {
   const navigate = useNavigate()
-  const { setOrganization, setCurrentOrg } = useApp()
+  const { setActiveOrg } = useApp()
+  const { refreshOrganizations } = useAuth()
   const [form, setForm] = useState({ name: '', teamSize: '' })
   const [errors, setErrors] = useState({})
+  const [submitError, setSubmitError] = useState('')
+  const [submitting, setSubmitting] = useState(false)
 
   const set = (key, value) => {
     setForm((f) => ({ ...f, [key]: value }))
@@ -25,16 +30,26 @@ export default function OnboardingView() {
 
   // Les deux champs sont marqués obligatoires (`*`) sur le site : on valide à la
   // soumission, on enregistre l'organisation puis on rejoint son espace.
-  const submit = (event) => {
+  const submit = async (event) => {
     event.preventDefault()
+    setSubmitError('')
     const next = {}
     if (!form.name.trim()) next.name = 'Veuillez saisir le nom de votre organisation.'
     if (!form.teamSize) next.teamSize = 'Veuillez sélectionner la taille de votre équipe.'
     setErrors(next)
     if (Object.keys(next).length > 0) return
-    setOrganization(form.name.trim())
-    setCurrentOrg('own')
-    navigate('/projects')
+
+    setSubmitting(true)
+    try {
+      const org = await createOrganization(form.name)
+      await refreshOrganizations()
+      setActiveOrg(org.id)
+      navigate('/projects', { replace: true })
+    } catch (error) {
+      setSubmitError(messageForError(error))
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (
@@ -90,9 +105,15 @@ export default function OnboardingView() {
             {errors.teamSize ? <p className="td-onb-error">{errors.teamSize}</p> : null}
           </div>
 
+          {submitError ? (
+            <p className="td-onb-error" role="alert">
+              {submitError}
+            </p>
+          ) : null}
+
           <div className="td-onb-actions">
-            <button type="submit" className="td-onb-submit">
-              Créer l’organisation
+            <button type="submit" className="td-onb-submit" disabled={submitting}>
+              {submitting ? 'Création…' : 'Créer l’organisation'}
             </button>
             <p className="td-onb-legal">
               En créant une organisation, vous acceptez notre{' '}

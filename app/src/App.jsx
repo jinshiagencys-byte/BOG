@@ -5,50 +5,95 @@ import TestRunsView from './views/TestRunsView.jsx'
 import TestCasesView from './views/TestCasesView.jsx'
 import OnboardingView from './views/OnboardingView.jsx'
 import AuthView from './views/AuthView.jsx'
+import ResetPasswordView from './views/ResetPasswordView.jsx'
 import PlaceholderView from './views/PlaceholderView.jsx'
 import ProjectsView from './views/ProjectsView.jsx'
+import GithubSettingsView from './views/GithubSettingsView.jsx'
+import ProjectSettingsView from './views/ProjectSettingsView.jsx'
 import { NAV_FLAT, ORG_NAV_FLAT } from './app/nav.js'
-import { DEMO_PROJECT_SLUG } from './app/projects.js'
+import {
+  AuthCallback,
+  ProjectGate,
+  RedirectIfAuthed,
+  RequireAuth,
+  RequireOrg,
+} from './app/guards.jsx'
 
-const BUILT = ['/dashboard', '/test-runs', '/test-cases']
-const HOME = `/${DEMO_PROJECT_SLUG}/dashboard`
+const BUILT = ['/dashboard', '/test-runs', '/test-cases', '/settings']
+const HOME = '/projects'
 
 export default function App() {
   return (
     <Routes>
-      {/* Écran d'onboarding : plein page, hors du shell (pas de sidebar ni header). */}
-      <Route path="/onboarding" element={<OnboardingView />} />
-
       {/* Authentification : plein page, hors du shell. */}
-      <Route path="/auth" element={<AuthView mode="signin" />} />
-      <Route path="/auth/signup" element={<AuthView mode="signup" />} />
+      <Route
+        path="/auth"
+        element={
+          <RedirectIfAuthed>
+            <AuthView mode="signin" />
+          </RedirectIfAuthed>
+        }
+      />
+      <Route
+        path="/auth/signup"
+        element={
+          <RedirectIfAuthed>
+            <AuthView mode="signup" />
+          </RedirectIfAuthed>
+        }
+      />
+      <Route path="/auth/callback" element={<AuthCallback />} />
+      <Route path="/auth/reset" element={<ResetPasswordView />} />
 
-      {/* Espace organisation : sidebar « Workspace / General » + page Projects. */}
-      <Route element={<AppShell variant="org" />}>
-        <Route path="/projects" element={<ProjectsView />} />
-        {ORG_NAV_FLAT.filter((i) => i.to !== '/projects').map((i) => (
-          <Route key={i.to} path={i.to} element={<PlaceholderView title={i.name} />} />
-        ))}
+      <Route element={<RequireAuth />}>
+        {/* Onboarding : plein page, hors du shell, tant qu'aucune organisation n'existe. */}
+        <Route path="/onboarding" element={<OnboardingView />} />
+
+        {/* Espace organisation : sidebar « Workspace / General » + page Projects. */}
+        <Route element={<RequireOrg />}>
+          <Route element={<AppShell variant="org" />}>
+            <Route path="/projects" element={<ProjectsView />} />
+            <Route path="/org-settings" element={<GithubSettingsView />} />
+            <Route path="/billing" element={<PlaceholderView title="Facturation" />} />
+            {ORG_NAV_FLAT.filter(
+              (item) => !['/projects', '/org-settings'].includes(item.to),
+            ).map((item) => (
+              <Route
+                key={item.to}
+                path={item.to}
+                element={<PlaceholderView title={item.name} />}
+              />
+            ))}
+          </Route>
+        </Route>
       </Route>
 
       {/* Espace projet : le slug du projet préfixe toutes les URLs (/DemoProject/dashboard). */}
-      <Route path="/:project" element={<AppShell />}>
+      <Route
+        path="/:project"
+        element={
+          <ProjectGate>
+            <AppShell />
+          </ProjectGate>
+        }
+      >
         <Route index element={<Navigate to="dashboard" replace />} />
         <Route path="dashboard" element={<DashboardView />} />
         <Route path="test-runs" element={<TestRunsView />} />
         <Route path="test-cases" element={<TestCasesView />} />
-        {NAV_FLAT.filter((i) => !BUILT.includes(i.to)).map((i) => (
-          <Route key={i.to} path={i.to.slice(1)} element={<PlaceholderView title={i.name} />} />
+        <Route path="settings" element={<ProjectSettingsView />} />
+        {NAV_FLAT.filter((item) => !BUILT.includes(item.to)).map((item) => (
+          <Route
+            key={item.to}
+            path={item.to.slice(1)}
+            element={<PlaceholderView title={item.name} />}
+          />
         ))}
       </Route>
 
-      {/* Anciennes URLs à plat : /dashboard → /DemoProject/dashboard. */}
-      {NAV_FLAT.map((i) => (
-        <Route
-          key={i.to}
-          path={i.to}
-          element={<Navigate to={`/${DEMO_PROJECT_SLUG}${i.to}`} replace />}
-        />
+      {/* Anciennes URLs à plat : on revient à l'espace organisation. */}
+      {NAV_FLAT.map((item) => (
+        <Route key={item.to} path={item.to} element={<Navigate to={HOME} replace />} />
       ))}
 
       <Route path="*" element={<Navigate to={HOME} replace />} />

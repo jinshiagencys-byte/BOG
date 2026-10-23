@@ -1,6 +1,25 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import Icon from '../components/Icon.jsx'
+import { useAuth } from '../app/auth-context.js'
+import { DEMO_PROJECT_SLUG } from '../app/projects.js'
+
+function authMessage(error) {
+  const raw = String(error?.message || '').toLowerCase()
+  if (raw.includes('invalid login credentials')) {
+    return 'Incorrect email or password.'
+  }
+  if (raw.includes('email not confirmed')) {
+    return 'Please confirm your email address before signing in.'
+  }
+  if (raw.includes('user already registered')) {
+    return 'An account already exists with this email address.'
+  }
+  if (raw.includes('password')) {
+    return 'Password must be at least 8 characters long.'
+  }
+  return error?.message || 'Authentication failed.'
+}
 
 // Logo Google multicolore (les icônes Lucide n'embarquent pas les marques).
 function GoogleMark() {
@@ -29,6 +48,7 @@ function GoogleMark() {
 export default function AuthView({ mode = 'signin' }) {
   const isSignup = mode === 'signup'
   const navigate = useNavigate()
+  const { signIn, signUp, resetPassword } = useAuth()
 
   // Adresse mémorisée depuis une connexion précédente (état initial, sans effet).
   const [form, setForm] = useState(() => {
@@ -47,28 +67,33 @@ export default function AuthView({ mode = 'signin' }) {
   const [terms, setTerms] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [submitting, setSubmitting] = useState(false)
 
-  const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }))
+  const set = (key) => (e) => {
+    setForm((f) => ({ ...f, [key]: e.target.value }))
+    setError('')
+    setNotice('')
+  }
 
-  const submit = (e) => {
+  const submit = async (e) => {
     e.preventDefault()
     setError('')
     setNotice('')
 
     if (!form.email.trim() || !form.password) {
-      setError('Veuillez renseigner votre adresse e-mail et votre mot de passe.')
+      setError('Enter your email address and password.')
       return
     }
     if (isSignup && !form.name.trim()) {
-      setError('Veuillez renseigner votre nom complet.')
+      setError('Enter your full name.')
       return
     }
     if (isSignup && form.password.length < 8) {
-      setError('Le mot de passe doit contenir au moins 8 caractères.')
+      setError('Password must be at least 8 characters long.')
       return
     }
     if (isSignup && !terms) {
-      setError('Veuillez accepter les conditions d’utilisation.')
+      setError('Please accept the Terms of Service and Privacy Policy.')
       return
     }
 
@@ -79,24 +104,51 @@ export default function AuthView({ mode = 'signin' }) {
       /* ignore */
     }
 
-    if (isSignup) {
-      navigate('/onboarding')
-    } else {
-      navigate('/projects')
+    setSubmitting(true)
+    try {
+      if (isSignup) {
+        const data = await signUp({
+          email: form.email,
+          password: form.password,
+          fullName: form.name,
+        })
+        if (data.session) {
+          navigate('/onboarding', { replace: true })
+        } else {
+          setNotice(
+            'Compte créé. Vérifiez votre boîte e-mail pour confirmer votre adresse avant de vous connecter.',
+          )
+        }
+      } else {
+        await signIn(form.email, form.password)
+        navigate('/projects', { replace: true })
+      }
+    } catch (submitError) {
+      setError(authMessage(submitError))
+    } finally {
+      setSubmitting(false)
     }
   }
 
   const oauth = (provider) =>
-    setNotice(`${provider} sign-in is not available in this demo.`)
+    setNotice(`${provider} sign-in is not configured on this deployment.`)
 
-  const forgot = () => {
+  const forgot = async () => {
     setError('')
+    setNotice('')
     if (!form.email.trim()) {
-      setNotice('')
-      setError('Saisissez d’abord votre adresse e-mail.')
+      setError('Enter your email address first.')
       return
     }
-    setNotice(`Password reset link sent to ${form.email.trim()}.`)
+    setSubmitting(true)
+    try {
+      await resetPassword(form.email)
+      setNotice(`Password reset link sent to ${form.email.trim()}.`)
+    } catch (resetError) {
+      setError(authMessage(resetError))
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (
@@ -224,9 +276,15 @@ export default function AuthView({ mode = 'signin' }) {
           <button
             type="submit"
             className="td-auth-submit"
-            disabled={isSignup && !terms}
+            disabled={submitting || (isSignup && !terms)}
           >
-            {isSignup ? 'Create account' : 'Sign in'}
+            {submitting
+              ? isSignup
+                ? 'Creating account…'
+                : 'Signing in…'
+              : isSignup
+                ? 'Create account'
+                : 'Sign in'}
           </button>
         </form>
 
@@ -235,6 +293,10 @@ export default function AuthView({ mode = 'signin' }) {
           <Link to={isSignup ? '/auth' : '/auth/signup'}>
             {isSignup ? 'Sign in' : 'Create an account'}
           </Link>
+        </p>
+
+        <p className="td-auth-foot">
+          <Link to={`/${DEMO_PROJECT_SLUG}/dashboard`}>Explore the demo project</Link>
         </p>
       </section>
     </main>

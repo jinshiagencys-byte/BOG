@@ -12,15 +12,15 @@ import { useApp } from '../app/app-context.js'
 import { DEMO_ORG_NAME, DEMO_PROJECT_SLUG } from '../app/projects.js'
 
 export default function OrgSwitcher({ onNavigate }) {
-  const { organization, currentOrg, setCurrentOrg } = useApp()
+  const { activeOrg, organizations, setActiveOrg } = useApp()
   const { project } = useParams()
   const navigate = useNavigate()
   const [open, setOpen] = useState(false)
   const ref = useRef(null)
 
-  // L'organisation courante : celle du projet ouvert, sinon celle de la page Projects.
-  const isDemo = project ? project === DEMO_PROJECT_SLUG : currentOrg === 'demo'
-  const currentOrgName = isDemo ? DEMO_ORG_NAME : organization
+  // L'organisation courante : celle du projet ouvert, sinon l'organisation active.
+  const isDemo = project === DEMO_PROJECT_SLUG || Boolean(activeOrg?.isDemo)
+  const currentOrgName = isDemo ? DEMO_ORG_NAME : activeOrg?.name || 'Organisation'
 
   useEffect(() => {
     if (!open) return undefined
@@ -38,8 +38,8 @@ export default function OrgSwitcher({ onNavigate }) {
     }
   }, [open])
 
-  const switchTo = (org) => {
-    setCurrentOrg(org)
+  const switchTo = (orgId) => {
+    setActiveOrg(orgId)
     setOpen(false)
     if (onNavigate) onNavigate()
     navigate('/projects')
@@ -75,19 +75,43 @@ export default function OrgSwitcher({ onNavigate }) {
             Organisations
           </div>
 
-          <button
-            type="button"
-            role="menuitem"
-            className="td-menu-item"
-            data-testid="org-switcher-item-current"
-            onClick={() => switchTo('own')}
-          >
-            <span className="td-menu-avatar">{organization.slice(0, 1).toUpperCase()}</span>
-            <span className="td-menu-text">
-              <span className="td-menu-name">{organization}</span>
-            </span>
-            {isDemo ? null : <Icon name="check" className="td-ic-16 td-menu-check" />}
-          </button>
+          {organizations.map((org) => (
+            <button
+              key={org.id}
+              type="button"
+              role="menuitem"
+              className="td-menu-item"
+              data-testid="org-switcher-item-current"
+              onClick={() => switchTo(org.id)}
+            >
+              <span className="td-menu-avatar">{org.name.slice(0, 1).toUpperCase()}</span>
+              <span className="td-menu-text">
+                <span className="td-menu-name">{org.name}</span>
+                <span className="td-menu-desc">
+                  {org.role === 'owner'
+                    ? 'Propriétaire'
+                    : org.role === 'admin'
+                      ? 'Administrateur'
+                      : 'Membre'}
+                </span>
+              </span>
+              {!isDemo && activeOrg?.id === org.id ? (
+                <Icon name="check" className="td-ic-16 td-menu-check" />
+              ) : null}
+            </button>
+          ))}
+
+          {!organizations.length ? (
+            <button
+              type="button"
+              role="menuitem"
+              className="td-menu-item"
+              onClick={() => go('/onboarding')}
+            >
+              <Icon name="plus" className="td-ic-16" />
+              <span className="td-menu-name">Créer une organisation</span>
+            </button>
+          ) : null}
 
           <button
             type="button"

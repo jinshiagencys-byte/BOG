@@ -109,6 +109,7 @@ export default function Header({ onToggleSidebar }) {
   const { theme, toggleTheme, setPaletteOpen, projects, organization } = useApp()
   const { project } = useParams()
   const location = useLocation()
+  const orgName = project === DEMO_PROJECT_SLUG ? DEMO_ORG_NAME : organization
   // Le fil d'ariane du vrai site est « <Projet> > <Page> ».
   const current = NAV_FLAT.find((i) => location.pathname === `/${project}${i.to}`)
 
@@ -125,7 +126,7 @@ export default function Header({ onToggleSidebar }) {
       <div className="td-header-sep" />
 
       <nav className="td-breadcrumb" aria-label="breadcrumb">
-        <ProjectSwitcher project={project} projects={projects} organization={organization} />
+        <ProjectSwitcher project={project} projects={projects} organization={orgName} />
         <Icon name="chevron-right" className="td-ic-14" />
         <span className="td-breadcrumb-current">{current ? current.name : 'Dashboard'}</span>
       </nav>

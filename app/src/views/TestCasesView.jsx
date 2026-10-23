@@ -1,64 +1,92 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import Icon from '../components/Icon.jsx'
 import { CheckOption, Popover } from '../components/bits.jsx'
 import SuiteTree from '../components/testcases/SuiteTree.jsx'
 import GroupedTable from '../components/testcases/GroupedTable.jsx'
 import CaseDrawer from '../components/testcases/CaseDrawer.jsx'
 import Toast from '../components/testcases/Toast.jsx'
-import { useApp } from '../app/app-context.js'
-import { DEMO_PROJECT, DEMO_PROJECT_SLUG } from '../app/projects.js'
+import { PageSkeleton } from '../components/Skeleton.jsx'
+import { useProject } from '../app/project-context.js'
 import { buildCasePack } from '../data/casePacks.js'
+import {
+  createCase as createCaseApi,
+  deleteCase as deleteCaseApi,
+  deleteSuite as deleteSuiteApi,
+  getCatalog,
+  messageForError,
+  moveCase as moveCaseApi,
+  renameSuite as renameSuiteApi,
+  startRun as startRunApi,
+  syncCaseSteps,
+  updateCase as updateCaseApi,
+} from '../lib/api.js'
 
-// Les cas de test sont générés à l'avance selon la « Catégorie » du projet.
-// Le composant est re-monté (via `key`) quand on change de projet.
+// Les cas de démonstration sont générés localement ; les cas réels viennent de
+// `test_cases` / `test_steps`. Les identifiants envoyés à `start-run` sont
+// toujours les UUID réels, jamais les codes lisibles `TC-…`.
 export default function TestCasesView() {
-  const { project } = useParams()
-  const { projects } = useApp()
-  const current =
-    project === DEMO_PROJECT_SLUG
-      ? DEMO_PROJECT
-      : projects.find((p) => p.slug === project)
+  const { project, isDemo, loading, error } = useProject()
 
-  return (
-    <TestCasesViewInner
-      key={project}
-      category={current?.category || 'Autre'}
-    />
-  )
+  if (loading) return <PageSkeleton rows={8} />
+  if (error) {
+    return (
+      <>
+        <div className="td-page-head">
+          <h1>Cas de test</h1>
+          <p>Impossible de charger ce projet.</p>
+        </div>
+        <div className="td-card-surface td-settings-note is-error">
+          <Icon name="triangle-alert" className="td-ic-16" />
+          <span>{error}</span>
+        </div>
+      </>
+    )
+  }
+  if (!project) return null
+
+  return <TestCasesViewInner key={project.slug} project={project} isDemo={isDemo} />
 }
 
-function TestCasesViewInner({ category }) {
-  const pack = useMemo(() => buildCasePack(category), [category])
-  const [cases, setCases] = useState(pack.cases)
-  // Suites générées pour ce type de site (nom + nombre de cas).
-  const [suiteList, setSuiteList] = useState(() => pack.suites)
+function TestCasesViewInner({ project, isDemo }) {
+  const navigate = useNavigate()
+  const pack = useMemo(
+    () => (isDemo ? buildCasePack(project.category || 'Autre') : null),
+    [isDemo, project.category],
+  )
+
+  const [cases, setCases] = useState(() => pack?.cases || [])
+  const [plan, setPlan] = useState(null)
+  const [loading, setLoading] = useState(!isDemo)
+  const [error, setError] = useState('')
+
   const [selected, setSelected] = useState('all')
   const [expanded, setExpanded] = useState(() => new Set())
   const [q, setQ] = useState('')
   const [openGroups, setOpenGroups] = useState({})
   const [detailId, setDetailId] = useState(null)
   const [editing, setEditing] = useState(null)
-  // Renommage d'une suite directement dans l'en-tête du groupe.
   const [renaming, setRenaming] = useState(null)
-  // Création en ligne : une ligne « TC-xxx + champ titre » s'insère dans la suite.
   const [newCase, setNewCase] = useState(null)
   const [toast, setToast] = useState({ message: '', tone: 'success' })
   const [dragId, setDragId] = useState(null)
   const [dropHint, setDropHint] = useState(null)
   const [groupBySuite, setGroupBySuite] = useState(true)
   const [showSuites, setShowSuites] = useState(true)
-  /* cases cochés (sélection multiple, indépendante du tiroir ouvert) */
   const [checked, setChecked] = useState(() => new Set())
-  /* Déclenchements simulés en cours, par identifiant de cas. En attendant la
-     base : on garde l'état localement pour empêcher un double déclenchement. */
   const [running, setRunning] = useState(() => new Set())
+  const [submittingRun, setSubmittingRun] = useState(false)
   const runningTimers = useRef(new Map())
 
-  const showToast = useCallback((message, tone = 'success') => setToast({ message, tone }), [])
-  const hideToast = useCallback(() => setToast((t) => ({ ...t, message: '' })), [])
+  const showToast = useCallback(
+    (message, tone = 'success') => setToast({ message, tone }),
+    [],
+  )
+  const hideToast = useCallback(
+    () => setToast((current) => ({ ...current, message: '' })),
+    [],
+  )
 
-  // Nettoyage des minuteurs de simulation au démontage.
   useEffect(
     () => () => {
       runningTimers.current.forEach((timer) => clearTimeout(timer))
@@ -67,93 +95,102 @@ function TestCasesViewInner({ category }) {
     [],
   )
 
-  const triggerSelected = useCallback(() => {
-    const ids = [...checked]
-    if (!ids.length) return
-
-    const alreadyRunning = ids.filter((id) => running.has(id))
-    const fresh = ids.filter((id) => !running.has(id))
-
-    // Deuxième clic sur la même sélection : l'action est déjà en cours.
-    if (!fresh.length) {
-      showToast('Une action est déjà en cours pour les éléments sélectionnés.', 'error')
-      return
-    }
-
-    setRunning((prev) => new Set([...prev, ...fresh]))
-    showToast(
-      alreadyRunning.length
-        ? `Déclenchement de ${fresh.length} cas de test… ${alreadyRunning.length} déjà en cours.`
-        : `Déclenchement de ${fresh.length} cas de test sélectionné${
-            fresh.length > 1 ? 's' : ''
-          }…`,
-    )
-
-    // Simulation locale : l'action se termine au bout de 10 s (sera remplacée
-    // par l'état réel des runs quand la base sera branchée).
-    fresh.forEach((id) => {
-      const timer = window.setTimeout(() => {
-        setRunning((prev) => {
-          const next = new Set(prev)
-          next.delete(id)
-          return next
-        })
-        runningTimers.current.delete(id)
-      }, 10000)
-      runningTimers.current.set(id, timer)
-    })
-  }, [checked, running, showToast])
-
-  /* ---------- compteurs de suites (création, suppression, déplacement) ---------- */
-  const counts = useMemo(
-    () => Object.fromEntries(suiteList.map((s) => [s.name, s.count])),
-    [suiteList],
+  const load = useCallback(
+    async ({ silent = false } = {}) => {
+      if (isDemo) {
+        setCases(pack.cases)
+        setPlan(null)
+        setLoading(false)
+        setError('')
+        return
+      }
+      if (!silent) setLoading(true)
+      setError('')
+      try {
+        const data = await getCatalog(project.id)
+        setPlan(data.plan)
+        setCases(data.cases)
+      } catch (loadError) {
+        setError(messageForError(loadError))
+        if (!silent) setCases([])
+      } finally {
+        if (!silent) setLoading(false)
+      }
+    },
+    [isDemo, pack, project.id],
   )
 
-  const total = useMemo(() => suiteList.reduce((n, s) => n + s.count, 0), [suiteList])
+  useEffect(() => {
+    load()
+  }, [load])
 
-  // Identifiants des cas par suite, pour les cases à cocher du panneau « Suites ».
-  const idsBySuite = useMemo(() => {
-    const map = {}
-    for (const c of cases) (map[c.suite] ||= []).push(c.id)
-    return map
+  /* ---------- compteurs de suites ---------- */
+  const suiteList = useMemo(() => {
+    const map = new Map()
+    for (const item of cases) {
+      const suite = item.suite || 'Sans suite'
+      map.set(suite, (map.get(suite) || 0) + 1)
+    }
+    return [...map.entries()]
+      .sort(([a], [b]) => a.localeCompare(b, 'fr'))
+      .map(([name, count]) => ({ id: name, name, count, children: [] }))
   }, [cases])
 
-  const bumpSuite = useCallback((name, delta) => {
-    setSuiteList((prev) =>
-      prev.map((s) =>
-        s.name === name ? { ...s, count: Math.max(0, s.count + delta) } : s,
-      ),
-    )
-  }, [])
+  const counts = useMemo(
+    () => Object.fromEntries(suiteList.map((suite) => [suite.name, suite.count])),
+    [suiteList],
+  )
+  const total = cases.length
+  const activeCount = useMemo(
+    () => cases.filter((item) => item.status === 'active').length,
+    [cases],
+  )
+
+  const idsBySuite = useMemo(() => {
+    const map = {}
+    for (const item of cases) {
+      const suite = item.suite || 'Sans suite'
+      ;(map[suite] ||= []).push(item.id)
+    }
+    return map
+  }, [cases])
 
   /* ---------- regroupement ---------- */
   const groups = useMemo(() => {
     const query = q.trim().toLowerCase()
     let list = cases
-    if (query)
+    if (query) {
       list = list.filter(
-        (c) => c.title.toLowerCase().includes(query) || c.id.toLowerCase().includes(query),
+        (item) =>
+          item.title.toLowerCase().includes(query) ||
+          String(item.code || item.id).toLowerCase().includes(query),
       )
+    }
     if (selected !== 'all') {
-      const suite = suiteList.find((s) => s.id === selected)
-      if (suite) list = list.filter((c) => c.suite === suite.name)
+      const suite = suiteList.find((item) => item.id === selected)
+      if (suite) list = list.filter((item) => item.suite === suite.name)
     }
 
     if (!groupBySuite) {
-      return list.length       ? [{ path: '__all__', label: 'Tous les cas de test', cases: list }] : []
+      return list.length
+        ? [{ path: '__all__', label: 'Tous les cas de test', cases: list }]
+        : []
     }
 
     const map = new Map()
-    for (const c of list) {
-      if (!map.has(c.suite)) map.set(c.suite, [])
-      map.get(c.suite).push(c)
+    for (const item of list) {
+      if (!map.has(item.suite)) map.set(item.suite, [])
+      map.get(item.suite).push(item)
     }
-    return [...map.entries()].map(([path, cs]) => ({ path, label: path, cases: cs }))
+    return [...map.entries()].map(([path, items]) => ({
+      path,
+      label: path,
+      cases: items,
+    }))
   }, [cases, q, selected, groupBySuite, suiteList])
 
-  const visible = useMemo(() => groups.flatMap((g) => g.cases), [groups])
-  const detailIndex = visible.findIndex((c) => c.id === detailId)
+  const visible = useMemo(() => groups.flatMap((group) => group.cases), [groups])
+  const detailIndex = visible.findIndex((item) => item.id === detailId)
   const detailCase = detailIndex >= 0 ? visible[detailIndex] : null
 
   /* ---------- sélection / expansion ---------- */
@@ -170,7 +207,6 @@ function TestCasesViewInner({ category }) {
   const toggleGroup = (path) =>
     setOpenGroups((prev) => ({ ...prev, [path]: prev[path] === false }))
 
-  /* ---------- sélection par case à cocher ---------- */
   const toggleCheck = (id) =>
     setChecked((prev) => {
       const next = new Set(prev)
@@ -190,190 +226,344 @@ function TestCasesViewInner({ category }) {
       return next
     })
 
+  /* ---------- déclenchement ---------- */
+  const triggerSelected = useCallback(async () => {
+    const ids = [...checked]
+    if (!ids.length || submittingRun) return
+
+    if (!isDemo) {
+      if (!plan) {
+        showToast('Aucun plan de test actif : impossible de déclencher un cas.', 'error')
+        return
+      }
+      setSubmittingRun(true)
+      try {
+        const result = await startRunApi(project.id, ids, { trigger: 'manual' })
+        setChecked(new Set())
+        showToast(
+          result?.runNumber
+            ? `Exécution #${result.runNumber} déclenchée.`
+            : 'Exécution déclenchée.',
+        )
+        navigate(`/${project.slug}/test-runs`)
+      } catch (runError) {
+        showToast(messageForError(runError), 'error')
+      } finally {
+        setSubmittingRun(false)
+      }
+      return
+    }
+
+    const alreadyRunning = ids.filter((id) => running.has(id))
+    const fresh = ids.filter((id) => !running.has(id))
+    if (!fresh.length) {
+      showToast('Une action est déjà en cours pour les éléments sélectionnés.', 'error')
+      return
+    }
+
+    setRunning((prev) => new Set([...prev, ...fresh]))
+    showToast(
+      alreadyRunning.length
+        ? `Déclenchement de ${fresh.length} cas de test… ${alreadyRunning.length} déjà en cours.`
+        : `Déclenchement de ${fresh.length} cas de test sélectionné${
+            fresh.length > 1 ? 's' : ''
+          }…`,
+    )
+
+    // Démo uniquement : simulation de 10 s, sans appel Supabase.
+    fresh.forEach((id) => {
+      const timer = window.setTimeout(() => {
+        setRunning((prev) => {
+          const next = new Set(prev)
+          next.delete(id)
+          return next
+        })
+        runningTimers.current.delete(id)
+      }, 10000)
+      runningTimers.current.set(id, timer)
+    })
+  }, [checked, isDemo, navigate, plan, project.id, project.slug, running, showToast, submittingRun])
+
   /* ---------- déplacements ---------- */
-  const moveCase = (sourceId, targetId, placeBefore) => {
-    const from = cases.findIndex((c) => c.id === sourceId)
+  const moveCase = async (sourceId, targetId, placeBefore) => {
+    const from = cases.findIndex((item) => item.id === sourceId)
     if (from < 0) return
     const next = cases.slice()
     const [moved] = next.splice(from, 1)
-    const targetIndex = next.findIndex((c) => c.id === targetId)
+    const targetIndex = next.findIndex((item) => item.id === targetId)
+    const target = targetIndex >= 0 ? next[targetIndex] : null
+    const targetSuite = target ? target.suite : moved.suite
+
+    if (!isDemo) {
+      const positions = cases
+        .filter((item) => item.suite === targetSuite && item.id !== sourceId)
+        .map((item) => Number(item.position ?? 0))
+      const maxPosition = positions.length ? Math.max(...positions) : 0
+      try {
+        await moveCaseApi(
+          sourceId,
+          targetSuite,
+          target ? Number(target.position ?? maxPosition) : maxPosition + 1,
+        )
+        await load({ silent: true })
+      } catch (moveError) {
+        showToast(messageForError(moveError), 'error')
+      }
+      return
+    }
 
     let placed = moved
-    let changedSuite = false
     if (targetIndex >= 0) {
-      const target = next[targetIndex]
       if (target.suite !== moved.suite) {
         placed = { ...moved, suite: target.suite, suitePath: target.suite.split('/') }
-        changedSuite = true
       }
       next.splice(placeBefore ? targetIndex : targetIndex + 1, 0, placed)
     } else {
       next.push(moved)
     }
-
     setCases(next)
-    if (changedSuite) {
-      bumpSuite(moved.suite, -1)
-      bumpSuite(target.suite, 1)
-    }
     showToast(
-      changedSuite
-        ? `📦 ${sourceId} déplacé vers « ${placed.suite} »`
-        : `↕ ${sourceId} réorganisé`,
+      target && target.suite !== moved.suite
+        ? `📦 ${moved.code || moved.id} déplacé vers « ${placed.suite} »`
+        : `↕ ${moved.code || moved.id} réorganisé`,
     )
   }
 
-  const dropCase = (id, suitePath) => {
-    const target = cases.find((c) => c.id === id)
+  const dropCase = async (id, suitePath) => {
+    const target = cases.find((item) => item.id === id)
     if (!target || target.suite === suitePath) return
+
+    if (!isDemo) {
+      const positions = cases
+        .filter((item) => item.suite === suitePath && item.id !== id)
+        .map((item) => Number(item.position ?? 0))
+      const maxPosition = positions.length ? Math.max(...positions) : 0
+      try {
+        await moveCaseApi(id, suitePath, maxPosition + 1)
+        await load({ silent: true })
+      } catch (moveError) {
+        showToast(messageForError(moveError), 'error')
+      }
+      return
+    }
+
     setCases((prev) =>
-      prev.map((c) =>
-        c.id === id ? { ...c, suite: suitePath, suitePath: suitePath.split('/') } : c,
+      prev.map((item) =>
+        item.id === id
+          ? { ...item, suite: suitePath, suitePath: suitePath.split('/') }
+          : item,
       ),
     )
-    bumpSuite(target.suite, -1)
-    bumpSuite(suitePath, 1)
-    showToast(`📦 ${id} déplacé vers « ${suitePath} »`)
+    showToast(`📦 ${target.code || target.id} déplacé vers « ${suitePath} »`)
   }
 
   /* ---------- drag & drop ---------- */
   const dragHandlers = {
-    onStart: (e, id) => {
-      e.dataTransfer.setData('text/plain', id)
-      e.dataTransfer.effectAllowed = 'move'
+    onStart: (event, id) => {
+      event.dataTransfer.setData('text/plain', id)
+      event.dataTransfer.effectAllowed = 'move'
       setDragId(id)
     },
-    onOver: (e, id) => {
+    onOver: (event, id) => {
       if (!dragId || dragId === id) return
-      e.preventDefault()
-      e.dataTransfer.dropEffect = 'move'
-      const rect = e.currentTarget.getBoundingClientRect()
-      const side = e.clientY - rect.top < rect.height / 2 ? 'top' : 'bottom'
-      setDropHint((h) => (h && h.id === id && h.side === side ? h : { id, side }))
+      event.preventDefault()
+      event.dataTransfer.dropEffect = 'move'
+      const rect = event.currentTarget.getBoundingClientRect()
+      const side = event.clientY - rect.top < rect.height / 2 ? 'top' : 'bottom'
+      setDropHint((hint) =>
+        hint && hint.id === id && hint.side === side ? hint : { id, side },
+      )
     },
     onLeave: () => setDropHint(null),
     onEnd: () => {
       setDragId(null)
       setDropHint(null)
     },
-    onDrop: (e, id) => {
-      e.preventDefault()
-      const sourceId = e.dataTransfer.getData('text/plain') || dragId
+    onDrop: (event, id) => {
+      event.preventDefault()
+      const sourceId = event.dataTransfer.getData('text/plain') || dragId
       setDropHint(null)
       if (!sourceId || sourceId === id) return
-      const rect = e.currentTarget.getBoundingClientRect()
-      moveCase(sourceId, id, e.clientY - rect.top < rect.height / 2)
+      const rect = event.currentTarget.getBoundingClientRect()
+      moveCase(sourceId, id, event.clientY - rect.top < rect.height / 2)
     },
   }
 
   /* ---------- création ---------- */
   const nextCaseId = useMemo(() => {
-    const maxId = cases.reduce((m, c) => {
-      const n = Number(String(c.id).split('-').pop()) || 0
-      return Math.max(m, n)
-    }, 0)
-    return `TC-${pack.code}-${String(maxId + 1).padStart(3, '0')}`
-  }, [cases, pack.code])
+    if (isDemo) {
+      const maxId = cases.reduce((max, item) => {
+        const number = Number(String(item.code || item.id).split('-').pop()) || 0
+        return Math.max(max, number)
+      }, 0)
+      return `TC-${pack.code}-${String(maxId + 1).padStart(3, '0')}`
+    }
 
-  // Ouvre la ligne de création inline dans la suite demandée (ou la suite courante).
+    const codes = cases.map((item) => item.code).filter(Boolean)
+    if (!codes.length) return 'TC-MAN-001'
+    const prefix = String(codes[0]).match(/^(TC-[A-Z0-9]+-)/)?.[1] || 'TC-MAN-'
+    let max = 0
+    for (const code of codes) {
+      if (!String(code).startsWith(prefix)) continue
+      const match = String(code).match(/(\d+)$/)
+      if (match) max = Math.max(max, Number(match[1]))
+    }
+    return `${prefix}${String(max + 1).padStart(3, '0')}`
+  }, [cases, isDemo, pack])
+
   const startNewCase = (suitePath) => {
     setEditing(null)
     setRenaming(null)
+    // La vue « non groupée » utilise le pseudo-groupe `__all__` : il ne doit
+    // jamais devenir le nom d'une vraie suite en base.
+    const requested = suitePath && suitePath !== '__all__' ? suitePath : null
     const fallback =
-      (selected !== 'all' && suiteList.find((s) => s.id === selected)?.name) ||
-      groups[0]?.path ||
-      suiteList[0].name
-    const path = suitePath || fallback
+      (selected !== 'all' && suiteList.find((suite) => suite.id === selected)?.name) ||
+      (groups[0]?.path !== '__all__' ? groups[0]?.path : null) ||
+      suiteList[0]?.name ||
+      'Suite principale'
+    const path = requested || fallback
     setOpenGroups((prev) => ({ ...prev, [path]: true }))
-    // un brouillon déjà ouvert dans la même suite n'est pas réinitialisé
-    setNewCase((prev) => (prev && prev.path === path ? prev : { path, title: '' }))
+    setNewCase((prev) =>
+      prev && prev.path === path ? prev : { path, title: '' },
+    )
   }
 
-  const saveNewCase = () => {
+  const saveNewCase = async () => {
     if (!newCase || !newCase.title.trim()) return
-    const title = newCase.title.trim()
-    const created = {
-      id: nextCaseId,
-      title,
-      status: 'active',
-      priority: 'medium',
-      suite: newCase.path,
-      suitePath: [newCase.path],
-      description: title,
-      preconditions: ['L’utilisateur est connecté au projet'],
-      postconditions: 'Le parcours se déroule comme prévu.',
-      steps: [],
-      tags: [],
-      updatedAt: 'À l’instant',
+    if (!isDemo && !plan) {
+      showToast('Aucun plan de test actif : impossible de créer un cas.', 'error')
+      return
     }
-    setCases((prev) => [created, ...prev])
-    setNewCase(null)
-    bumpSuite(created.suite, 1)
+    const title = newCase.title.trim()
+    try {
+      if (isDemo) {
+        const created = {
+          id: nextCaseId,
+          code: nextCaseId,
+          title,
+          status: 'active',
+          priority: 'medium',
+          suite: newCase.path,
+          suitePath: [newCase.path],
+          description: title,
+          preconditions: ['L’utilisateur est connecté au projet'],
+          postconditions: 'Le parcours se déroule comme prévu.',
+          steps: [],
+          tags: [],
+          updatedAt: 'À l’instant',
+        }
+        setCases((prev) => [created, ...prev])
+        setNewCase(null)
+        showToast(`Le cas de test ${created.code} a été créé.`)
+        return
+      }
 
-    const current = selected !== 'all' ? suiteList.find((s) => s.id === selected) : null
-    if (current && created.suite !== current.name) setSelected('all')
-
-    showToast(`Le cas de test ${created.id} a été créé.`)
+      const created = await createCaseApi(plan.id, {
+        code: nextCaseId,
+        title,
+        suite: newCase.path,
+      })
+      setNewCase(null)
+      await load({ silent: true })
+      showToast(`Le cas de test ${created.code} a été créé.`)
+    } catch (createError) {
+      showToast(messageForError(createError), 'error')
+    }
   }
 
   const cancelNewCase = () => setNewCase(null)
 
   /* ---------- édition / suppression ---------- */
-  const openEdit = (c) => {
+  const openEdit = (item) => {
     setNewCase(null)
-    setEditing({ id: c.id, title: c.title })
+    setEditing({ id: item.id, title: item.title })
   }
 
-  const saveEdit = () => {
+  const saveEdit = async () => {
     if (!editing || !editing.title.trim()) return
     const title = editing.title.trim()
-    setCases((prev) =>
-      prev.map((c) =>
-        c.id === editing.id
-          ? {
-              ...c,
-              title,
-              // la description générée à la création suit le titre
-              description: c.description === c.title ? title : c.description,
-              updatedAt: 'À l’instant',
-            }
-          : c,
-      ),
-    )
-    showToast(`Le cas de test ${editing.id} a été mis à jour.`)
-    setEditing(null)
+    const target = cases.find((item) => item.id === editing.id)
+
+    try {
+      if (isDemo) {
+        setCases((prev) =>
+          prev.map((item) =>
+            item.id === editing.id
+              ? {
+                  ...item,
+                  title,
+                  description: item.description === item.title ? title : item.description,
+                  updatedAt: 'À l’instant',
+                }
+              : item,
+          ),
+        )
+        showToast(`Le cas de test ${editing.id} a été mis à jour.`)
+        setEditing(null)
+        return
+      }
+
+      await updateCaseApi(editing.id, {
+        title,
+        ...(target && target.description === target.title ? { description: title } : {}),
+      })
+      setEditing(null)
+      await load({ silent: true })
+      showToast('Le cas de test a été mis à jour.')
+    } catch (editError) {
+      showToast(messageForError(editError), 'error')
+    }
   }
 
-  // ouvrir un cas ferme la ligne de création en cours
   const openCase = (id) => {
     setNewCase(null)
     setEditing(null)
     setDetailId(id)
   }
 
-  const deleteCase = (id) => {
-    const target = cases.find((c) => c.id === id)
-    setCases((prev) => prev.filter((c) => c.id !== id))
-    setChecked((prev) => {
-      if (!prev.has(id)) return prev
-      const next = new Set(prev)
-      next.delete(id)
-      return next
-    })
-    if (target) bumpSuite(target.suite, -1)
-    if (editing?.id === id) setEditing(null)
-    if (detailId === id) setDetailId(null)
-    showToast(`Le cas de test ${id} a été supprimé.`)
+  const removeCase = async (id) => {
+    const target = cases.find((item) => item.id === id)
+    try {
+      if (!isDemo) {
+        await deleteCaseApi(id)
+      } else {
+        setCases((prev) => prev.filter((item) => item.id !== id))
+      }
+      setChecked((prev) => {
+        if (!prev.has(id)) return prev
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
+      if (editing?.id === id) setEditing(null)
+      if (detailId === id) setDetailId(null)
+      if (!isDemo) await load({ silent: true })
+      showToast(
+        `Le cas de test ${target?.code || target?.id || ''} a été supprimé.`.trim(),
+      )
+    } catch (deleteError) {
+      showToast(messageForError(deleteError), 'error')
+    }
   }
 
-  /* ---------- suites : renommer / supprimer ---------- */
+  /* ---------- suites : ajouter / renommer / supprimer ---------- */
+  const addSuite = () => {
+    const name = window.prompt('Nom de la nouvelle suite')
+    if (!name || !name.trim()) return
+    const suite = name.trim()
+    setOpenGroups((prev) => ({ ...prev, [suite]: true }))
+    setSelected('all')
+    startNewCase(suite)
+  }
+
   const startRenameGroup = (path) => {
     setEditing(null)
     setNewCase(null)
     setRenaming({ path, name: path })
   }
 
-  const saveRenameGroup = () => {
+  const saveRenameGroup = async () => {
     if (!renaming) return
     const oldName = renaming.path
     const name = renaming.name.trim()
@@ -382,67 +572,121 @@ function TestCasesViewInner({ category }) {
       setRenaming(null)
       return
     }
-    if (suiteList.some((s) => s.name === name)) {
+    if (suiteList.some((suite) => suite.name === name)) {
       showToast(`Une suite s’appelle déjà « ${name} ».`)
       return
     }
-    setSuiteList((prev) => prev.map((s) => (s.name === oldName ? { ...s, name } : s)))
-    setCases((prev) =>
-      prev.map((c) =>
-        c.suite === oldName || c.suite.startsWith(oldName + '/')
-          ? { ...c, suite: name + c.suite.slice(oldName.length), suitePath: [name] }
-          : c,
-      ),
-    )
-    setOpenGroups((prev) => {
-      if (!(oldName in prev)) return prev
-      const next = { ...prev }
-      next[name] = next[oldName]
-      delete next[oldName]
-      return next
-    })
-    setNewCase((prev) => (prev && prev.path === oldName ? { ...prev, path: name } : prev))
-    setRenaming(null)
-    showToast(`Suite renommée en « ${name} ».`)
+
+    try {
+      if (!isDemo) {
+        if (!plan) {
+          showToast('Aucun plan de test actif.', 'error')
+          return
+        }
+        await renameSuiteApi(plan.id, oldName, name)
+        await load({ silent: true })
+      } else {
+        setCases((prev) =>
+          prev.map((item) =>
+            item.suite === oldName || item.suite.startsWith(oldName + '/')
+              ? {
+                  ...item,
+                  suite: name + item.suite.slice(oldName.length),
+                  suitePath: [name],
+                }
+              : item,
+          ),
+        )
+      }
+
+      setOpenGroups((prev) => {
+        if (!(oldName in prev)) return prev
+        const next = { ...prev }
+        next[name] = next[oldName]
+        delete next[oldName]
+        return next
+      })
+      setNewCase((prev) => (prev && prev.path === oldName ? { ...prev, path: name } : prev))
+      if (selected === oldName) setSelected(name)
+      setRenaming(null)
+      showToast(`Suite renommée en « ${name} ».`)
+    } catch (renameError) {
+      showToast(messageForError(renameError), 'error')
+    }
   }
 
-  const deleteGroup = (path) => {
-    const ids = cases.filter((c) => c.suite === path).map((c) => c.id)
-    setCases((prev) => prev.filter((c) => c.suite !== path))
-    setSuiteList((prev) => prev.filter((s) => s.name !== path))
-    setChecked((prev) => {
-      if (!ids.some((id) => prev.has(id))) return prev
-      const next = new Set(prev)
-      for (const id of ids) next.delete(id)
-      return next
-    })
-    if (ids.includes(detailId)) setDetailId(null)
-    if (editing && ids.includes(editing.id)) setEditing(null)
-    if (newCase?.path === path) setNewCase(null)
-    if (selected !== 'all' && suiteList.find((s) => s.id === selected)?.name === path)
-      setSelected('all')
-    setRenaming(null)
-    showToast(
-      ids.length
-        ? `Suite « ${path} » et ses ${ids.length} cas de test supprimés.`
-        : `Suite « ${path} » supprimée.`,
-    )
+  const deleteGroup = async (path) => {
+    const ids = cases.filter((item) => item.suite === path).map((item) => item.id)
+    try {
+      if (!isDemo) {
+        if (!plan) {
+          showToast('Aucun plan de test actif.', 'error')
+          return
+        }
+        await deleteSuiteApi(plan.id, path)
+        await load({ silent: true })
+      } else {
+        setCases((prev) => prev.filter((item) => item.suite !== path))
+      }
+
+      setChecked((prev) => {
+        if (!ids.some((id) => prev.has(id))) return prev
+        const next = new Set(prev)
+        for (const id of ids) next.delete(id)
+        return next
+      })
+      if (ids.includes(detailId)) setDetailId(null)
+      if (editing && ids.includes(editing.id)) setEditing(null)
+      if (newCase?.path === path) setNewCase(null)
+      if (selected !== 'all' && suiteList.find((suite) => suite.id === selected)?.name === path) {
+        setSelected('all')
+      }
+      setRenaming(null)
+      showToast(
+        ids.length
+          ? `Suite « ${path} » et ses ${ids.length} cas de test supprimés.`
+          : `Suite « ${path} » supprimée.`,
+      )
+    } catch (deleteError) {
+      showToast(messageForError(deleteError), 'error')
+    }
   }
 
   /* ---------- édition depuis le tiroir ---------- */
-  const updateFromDrawer = (patch, message) => {
+  const updateFromDrawer = async (patch, message) => {
     if (!detailCase) return
     const id = detailCase.id
-    setCases((prev) =>
-      prev.map((c) => (c.id === id ? { ...c, ...patch, updatedAt: 'À l’instant' } : c)),
-    )
-    if (message) showToast(message)
+
+    if (isDemo) {
+      setCases((prev) =>
+        prev.map((item) =>
+          item.id === id ? { ...item, ...patch, updatedAt: 'À l’instant' } : item,
+        ),
+      )
+      if (message) showToast(message)
+      return
+    }
+
+    try {
+      if (patch.steps !== undefined) {
+        await syncCaseSteps(id, patch.steps)
+      }
+      const casePatch = { ...patch }
+      delete casePatch.steps
+      if (Object.keys(casePatch).length) {
+        await updateCaseApi(id, casePatch)
+      }
+      await load({ silent: true })
+      if (message) showToast(message)
+    } catch (updateError) {
+      showToast(messageForError(updateError), 'error')
+    }
   }
 
   /* ---------- raccourcis ---------- */
   useEffect(() => {
-    const onKey = (e) => {
-      if (e.key !== 'Escape') return
+    const onKey = (event) => {
+      if (event.key !== 'Escape') return
       if (renaming) setRenaming(null)
       else if (editing) setEditing(null)
       else if (newCase) setNewCase(null)
@@ -452,7 +696,27 @@ function TestCasesViewInner({ category }) {
     return () => window.removeEventListener('keydown', onKey)
   }, [renaming, editing, detailId, newCase])
 
-  const coveragePct = total ? Math.round((cases.length / total) * 100) : 0
+  const coveragePct = total ? Math.round((activeCount / total) * 100) : 0
+
+  if (loading && !isDemo) return <PageSkeleton rows={8} />
+
+  if (error && !cases.length) {
+    return (
+      <>
+        <div className="td-page-head">
+          <h1>Cas de test</h1>
+          <p>Impossible de charger le catalogue du projet.</p>
+        </div>
+        <div className="td-card-surface td-settings-note is-error">
+          <Icon name="triangle-alert" className="td-ic-16" />
+          <span>{error}</span>
+          <button type="button" className="td-btn td-btn-ghost" onClick={() => load()}>
+            Réessayer
+          </button>
+        </div>
+      </>
+    )
+  }
 
   return (
     <>
@@ -460,7 +724,16 @@ function TestCasesViewInner({ category }) {
         <div className="td-page-head">
           <h1>Cas de test</h1>
           <p>
-            {total} cas de test générés pour un site de type <b>{category}</b>
+            {isDemo ? (
+              <>
+                {total} cas de test générés pour un site de type <b>{project.category}</b>
+              </>
+            ) : (
+              <>
+                {total} cas de test dans le plan actif
+                {plan ? ` v${plan.version}` : ''} · <b>{project.name}</b>
+              </>
+            )}
           </p>
         </div>
 
@@ -471,11 +744,28 @@ function TestCasesViewInner({ category }) {
           <div className="td-coverage-label">
             <b>{coveragePct}% de couverture</b>
             <span>
-              {cases.length}/{total}
+              {activeCount}/{total}
             </span>
           </div>
         </div>
       </div>
+
+      {!isDemo && !plan ? (
+        <div className="td-settings-note is-error">
+          <Icon name="triangle-alert" className="td-ic-16" />
+          <span>
+            Aucun plan de test actif pour ce projet. Créez le projet depuis la page Projets pour
+            générer son plan et son catalogue de cas.
+          </span>
+        </div>
+      ) : null}
+
+      {error && cases.length ? (
+        <div className="td-settings-note is-error">
+          <Icon name="triangle-alert" className="td-ic-16" />
+          <span>{error}</span>
+        </div>
+      ) : null}
 
       {/* toolbar */}
       <div className="flex flex-wrap items-center gap-2">
@@ -486,7 +776,7 @@ function TestCasesViewInner({ category }) {
           />
           <input
             value={q}
-            onChange={(e) => setQ(e.target.value)}
+            onChange={(event) => setQ(event.target.value)}
             placeholder={`Rechercher parmi ${total} cas de test...`}
             className="h-8 w-56 rounded-md border border-border bg-card pl-8 pr-3 text-[12.5px] outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/20"
           />
@@ -499,14 +789,11 @@ function TestCasesViewInner({ category }) {
               value="group"
               label="Regrouper par suite"
               checked={groupBySuite}
-              onChange={(k, v, c) => setGroupBySuite(c)}
+              onChange={(_key, _value, isChecked) => setGroupBySuite(isChecked)}
             />
           </div>
         </Popover>
 
-        {/* Panneau Suites replié : on ne propose la bascule que dans cet état,
-            pour ne pas encombrer la barre d'outils (le repli se fait depuis
-            l'en-tête du panneau). */}
         {!showSuites ? (
           <button type="button" className="td-btn" onClick={() => setShowSuites(true)}>
             <Icon name="list-tree" className="td-ic-14" />
@@ -530,7 +817,10 @@ function TestCasesViewInner({ category }) {
             type="button"
             className="td-btn td-btn-icon"
             title="Actualiser"
-            onClick={() => showToast('Cas de test actualisés')}
+            onClick={async () => {
+              await load()
+              showToast('Cas de test actualisés')
+            }}
           >
             <Icon name="refresh-cw" className="td-ic-16" />
           </button>
@@ -538,7 +828,7 @@ function TestCasesViewInner({ category }) {
           <button
             type="button"
             className="td-btn td-btn-primary"
-            disabled={!checked.size}
+            disabled={!checked.size || submittingRun}
             title={
               checked.size
                 ? `Déclencher ${checked.size} cas de test`
@@ -547,7 +837,7 @@ function TestCasesViewInner({ category }) {
             onClick={triggerSelected}
           >
             <Icon name="circle-play" className="td-ic-14" />
-            <span>Déclenché</span>
+            <span>{submittingRun ? 'Déclenchement…' : 'Déclencher'}</span>
           </button>
 
           <button
@@ -583,7 +873,7 @@ function TestCasesViewInner({ category }) {
                   type="button"
                   className="td-btn-ghost"
                   title="Ajouter une suite"
-                  onClick={() => showToast('La création de suite n’est pas disponible dans la démo.')}
+                  onClick={addSuite}
                 >
                   <Icon name="plus" className="td-ic-14" />
                 </button>
@@ -628,20 +918,20 @@ function TestCasesViewInner({ category }) {
             onToggleCheck={toggleCheck}
             onToggleGroupCheck={toggleGroupCheck}
             onEdit={openEdit}
-            onDelete={deleteCase}
+            onDelete={removeCase}
             onCreate={startNewCase}
             newCase={newCase}
             nextCaseId={nextCaseId}
-            onNewCaseTitle={(title) => setNewCase((n) => (n ? { ...n, title } : n))}
+            onNewCaseTitle={(title) => setNewCase((current) => (current ? { ...current, title } : current))}
             onNewCaseSave={saveNewCase}
             onNewCaseCancel={cancelNewCase}
             editing={editing}
-            onEditTitle={(title) => setEditing((e) => (e ? { ...e, title } : e))}
+            onEditTitle={(title) => setEditing((current) => (current ? { ...current, title } : current))}
             onEditSave={saveEdit}
             onEditCancel={() => setEditing(null)}
             renaming={renaming}
             onRename={startRenameGroup}
-            onRenameName={(name) => setRenaming((r) => (r ? { ...r, name } : r))}
+            onRenameName={(name) => setRenaming((current) => (current ? { ...current, name } : current))}
             onRenameSave={saveRenameGroup}
             onRenameCancel={() => setRenaming(null)}
             onDeleteGroup={deleteGroup}

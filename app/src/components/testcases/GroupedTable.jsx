@@ -3,6 +3,7 @@ import Icon from '../Icon.jsx'
 import Check from './Check.jsx'
 
 function Row({ c, isSelected, isChecked, isDragging, dropSide, onOpen, onToggleCheck, onEdit, onDelete, dragHandlers }) {
+  const label = c.code || c.id
   return (
     <div
       className={
@@ -34,17 +35,17 @@ function Row({ c, isSelected, isChecked, isDragging, dropSide, onOpen, onToggleC
       </span>
       <Check
         checked={isChecked}
-        label={isChecked ? `Désélectionner ${c.id}` : `Sélectionner ${c.id}`}
+        label={isChecked ? `Désélectionner ${label}` : `Sélectionner ${label}`}
         onChange={() => onToggleCheck(c.id)}
       />
-      <span className="td-tc-id">{c.id}</span>
+      <span className="td-tc-id">{label}</span>
       <span className="td-tc-title">{c.title}</span>
       <div className="td-tc-row-actions">
         <button
           type="button"
           className="td-btn-ghost"
-          title={`Modifier ${c.id}`}
-          aria-label={`Modifier ${c.id}`}
+          title={`Modifier ${label}`}
+          aria-label={`Modifier ${label}`}
           onClick={(e) => {
             e.stopPropagation()
             onEdit(c)
@@ -55,8 +56,8 @@ function Row({ c, isSelected, isChecked, isDragging, dropSide, onOpen, onToggleC
         <button
           type="button"
           className="td-btn-ghost td-btn-danger"
-          title={`Supprimer ${c.id}`}
-          aria-label={`Supprimer ${c.id}`}
+          title={`Supprimer ${label}`}
+          aria-label={`Supprimer ${label}`}
           onClick={(e) => {
             e.stopPropagation()
             onDelete(c.id)
@@ -134,6 +135,7 @@ function NewRow({ id, title, onTitle, onSave, onCancel }) {
 /* Ligne d'édition inline : même gabarit que la création, titre pré-rempli. */
 function EditRow({ c, title, onTitle, onSave, onCancel }) {
   const ref = useRef(null)
+  const label = c.code || c.id
 
   useEffect(() => {
     const el = ref.current
@@ -150,12 +152,12 @@ function EditRow({ c, title, onTitle, onSave, onCancel }) {
         <Icon name="grip-vertical" className="td-ic-14" />
       </span>
       <span className="td-tc-new-spacer" aria-hidden="true" />
-      <span className="td-tc-id">{c.id}</span>
+      <span className="td-tc-id">{label}</span>
       <input
         ref={ref}
         className="td-control td-tc-new-input"
         placeholder="Titre du cas de test"
-        aria-label={`Titre de ${c.id}`}
+        aria-label={`Titre de ${label}`}
         value={title}
         onChange={(e) => onTitle(e.target.value)}
         onKeyDown={(e) => {
@@ -336,24 +338,28 @@ export default function GroupedTable({
                       >
                         <Icon name="plus" className="td-ic-14" />
                       </button>
-                      <button
-                        type="button"
-                        className="td-btn-ghost"
-                        title="Renommer la suite"
-                        aria-label={`Renommer la suite ${group.label}`}
-                        onClick={() => onRename(group.path)}
-                      >
-                        <Icon name="pencil" className="td-ic-14" />
-                      </button>
-                      <button
-                        type="button"
-                        className="td-btn-ghost td-btn-danger"
-                        title="Supprimer la suite"
-                        aria-label={`Supprimer la suite ${group.label}`}
-                        onClick={() => onDeleteGroup(group.path)}
-                      >
-                        <Icon name="trash-2" className="td-ic-14" />
-                      </button>
+                      {group.path !== '__all__' ? (
+                        <>
+                          <button
+                            type="button"
+                            className="td-btn-ghost"
+                            title="Renommer la suite"
+                            aria-label={`Renommer la suite ${group.label}`}
+                            onClick={() => onRename(group.path)}
+                          >
+                            <Icon name="pencil" className="td-ic-14" />
+                          </button>
+                          <button
+                            type="button"
+                            className="td-btn-ghost td-btn-danger"
+                            title="Supprimer la suite"
+                            aria-label={`Supprimer la suite ${group.label}`}
+                            onClick={() => onDeleteGroup(group.path)}
+                          >
+                            <Icon name="trash-2" className="td-ic-14" />
+                          </button>
+                        </>
+                      ) : null}
                     </>
                   )}
                 </div>
@@ -379,7 +385,7 @@ export default function GroupedTable({
                   />
                   <span className="td-tc-subhead-text">Cas de test</span>
                 </div>
-                {newCase && newCase.path === group.path ? (
+                {newCase && (newCase.path === group.path || group.path === '__all__') ? (
                   <NewRow
                     id={nextCaseId}
                     title={newCase.title}

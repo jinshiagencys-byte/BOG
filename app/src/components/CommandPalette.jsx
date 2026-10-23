@@ -1,18 +1,35 @@
-import { useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useEffect, useState } from 'react'
 import Icon from './Icon.jsx'
 import { StatusDot } from './bits.jsx'
 import { useApp } from '../app/app-context.js'
+import { useProject } from '../app/project-context.js'
 import { runs } from '../data/runs.js'
-import { DEMO_PROJECT_SLUG } from '../app/projects.js'
+import { listRuns } from '../lib/api.js'
 
 function PaletteInner({ onClose }) {
-  const { openRun } = useApp()
-  const { project } = useParams()
+  const { openRun, runList } = useApp()
+  const { project, isDemo } = useProject()
   const [q, setQ] = useState('')
+  const [remote, setRemote] = useState([])
 
-  // Pas d'exécution d'exemple hors du projet de démo.
-  const source = project === DEMO_PROJECT_SLUG ? runs : []
+  useEffect(() => {
+    if (isDemo || runList.length || !project?.id) return undefined
+    let mounted = true
+    listRuns(project.id, { limit: 50 })
+      .then((rows) => {
+        if (mounted) setRemote(rows)
+      })
+      .catch(() => {
+        /* la palette reste vide si les exécutions sont inaccessibles */
+      })
+    return () => {
+      mounted = false
+    }
+  }, [isDemo, project?.id, runList.length])
+
+  // Démo : jeu statique. Projet réel : cache de la vue des exécutions, sinon
+  // chargement direct depuis Supabase (jamais depuis l'API GitHub).
+  const source = isDemo ? (runList.length ? runList : runs) : runList.length ? runList : remote
   const query = q.trim().toLowerCase()
   const hay = (r) =>
     ('#' + r.counter + ' ' + r.branch + ' ' + r.commitMessage + ' ' + r.author).toLowerCase()
@@ -37,7 +54,7 @@ function PaletteInner({ onClose }) {
       <div className="td-palette-results">
         {results.length ? (
           results.map((r) => (
-            <button key={r.id} className="td-pal-item" onClick={() => openRun(r)}>
+            <button key={r.id} className="td-pal-item" onClick={() => openRun(r, source)}>
               <StatusDot status={r.status} />
               <span className="td-pal-main">
                 <b>#{r.counter}</b>{' '}

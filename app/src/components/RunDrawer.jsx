@@ -1,10 +1,15 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import Icon from './Icon.jsx'
 import { useApp } from '../app/app-context.js'
+import { useAuth } from '../app/auth-context.js'
 import { fmtDuration } from '../lib/format.js'
 import { statusMeta } from '../lib/meta.js'
-import { runs } from '../data/runs.js'
 import { testCases } from '../data/suites.js'
+import {
+  acknowledgeRun,
+  getRunResults,
+  messageForError,
+} from '../lib/api.js'
 
 // Deux onglets de résultat, comme les statuts du tiroir « Cas de test ».
 const TABS = [
@@ -13,6 +18,9 @@ const TABS = [
 ]
 
 function ResultCard({ item, failed, proofOpen, onProof, acked, onAck }) {
+  const steps = item.steps || []
+  const label = item.code || item.id
+
   return (
     <article className={'td-run-case' + (failed ? ' is-failed' : ' is-passed')}>
       <div className="td-run-case-box">
@@ -21,21 +29,29 @@ function ResultCard({ item, failed, proofOpen, onProof, acked, onAck }) {
             <Icon name={failed ? 'x' : 'check'} className="td-ic-12" />
           </span>
           <span className="td-run-case-title">
-            <span className="td-run-case-id">{item.id}</span> · {item.title}
+            <span className="td-run-case-id">{label}</span> · {item.title}
           </span>
         </div>
         <p className="td-run-case-msg">
           {failed
-            ? 'Le test a échoué : le comportement observé ne correspond pas au résultat attendu.'
-            : item.postconditions || 'Test validé : tous les critères attendus ont été vérifiés.'}
+            ? item.failureMessage ||
+              'Le test a échoué : le comportement observé ne correspond pas au résultat attendu.'
+            : item.postconditions ||
+              'Test validé : tous les critères attendus ont été vérifiés.'}
         </p>
 
         {proofOpen ? (
           <ol className="td-run-proof">
-            {item.steps.map((s) => (
-              <li key={s.action}>
-                <b>{s.action}</b>
-                <span>{s.expected}</span>
+            {steps.map((step, index) => (
+              <li key={step.id || `${step.action}-${index}`}>
+                <b>{step.action}</b>
+                <span>{step.expected}</span>
+                {step.actual ? <em>Observé : {step.actual}</em> : null}
+                {step.evidenceUrl ? (
+                  <a href={step.evidenceUrl} target="_blank" rel="noreferrer">
+                    Voir la preuve
+                  </a>
+                ) : null}
               </li>
             ))}
           </ol>
@@ -53,7 +69,7 @@ function ResultCard({ item, failed, proofOpen, onProof, acked, onAck }) {
             onClick={onAck}
             disabled={acked}
           >
-            {acked ? 'Relance demandée' : 'Acquitter et relancer'}
+            {acked ? 'Acquitté' : 'Acquitter'}
           </button>
         </div>
       ) : null}
@@ -62,29 +78,96 @@ function ResultCard({ item, failed, proofOpen, onProof, acked, onAck }) {
 }
 
 function RunDetail({ run, index, total, onPrev, onNext, onClose }) {
+  const { user } = useAuth()
+  const { markRunAcknowledged } = useApp()
+  const isDemo = Boolean(run.isDemo)
   const [tab, setTab] = useState(run.status === 'passed' ? 'passed' : 'failed')
   const [proof, setProof] = useState(null)
   const [acked, setAcked] = useState(() => new Set())
+  const [results, setResults] = useState([])
+  const [loading, setLoading] = useState(!isDemo)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (isDemo) {
+      setLoading(false)
+      setResults([])
+      setError('')
+      return undefined
+    }
+
+    let mounted = true
+    setLoading(true)
+    setError('')
+    getRunResults(run.id)
+      .then((rows) => {
+        if (mounted) setResults(rows)
+      })
+      .catch((loadError) => {
+        if (mounted) {
+          setResults([])
+          setError(messageForError(loadError))
+        }
+      })
+      .finally(() => {
+        if (mounted) setLoading(false)
+      })
+
+    return () => {
+      mounted = false
+    }
+  }, [isDemo, run.id])
 
   const s = statusMeta(run.status)
-  const started = new Date(run.startTime).toLocaleString('fr-FR')
+  const started = run.startTime
+    ? new Date(run.startTime).toLocaleString('fr-FR')
+    : '—'
+  const suiteLabel =
+    run.suite && run.suite !== '—'
+      ? run.suite
+      : results[0]?.suite || run.suite || '—'
 
-  // Tests rattachés à la suite exécutée. La démo ne stocke pas le détail
-  // cas par cas : les échecs du run sont répartis sur les cas de la suite.
-  const linked = testCases.filter((c) => c.suite === run.suite)
-  const failedLinked = Math.min(run.results.failed, linked.length)
-  const rows = linked.map((c, i) => ({
-    item: c,
-    failed:
-      Math.round(((i + 1) * failedLinked) / linked.length) >
-      Math.round((i * failedLinked) / linked.length),
-  }))
-  const visible = rows.filter((r) => r.failed === (tab === 'failed'))
+  // Démo : le détail cas par cas n'est pas stocké ; on répartit les échecs sur
+  // les cas de la suite. Un projet réel utilise les `test_case_results`.
+  const linked = isDemo
+    ? testCases.filter((item) => item.suite === run.suite)
+    : []
+  const failedLinked = isDemo
+    ? Math.min(run.results.failed, linked.length)
+    : 0
+  const rows = isDemo
+    ? linked.map((item, position) => ({
+        item,
+        failed:
+          Math.round(((position + 1) * failedLinked) / linked.length) >
+          Math.round((position * failedLinked) / linked.length),
+      }))
+    : results.map((item) => ({ item, failed: item.failed }))
 
-  const acknowledge = (id) => {
-    const next = new Set(acked)
-    next.add(id)
-    setAcked(next)
+  const visible = rows.filter((row) => row.failed === (tab === 'failed'))
+  const linkedCount = isDemo ? linked.length : results.length
+
+  const acknowledge = async () => {
+    if (isDemo) {
+      try {
+        const current = new Set(JSON.parse(sessionStorage.getItem('td-acked-runs') || '[]'))
+        current.add(run.id)
+        sessionStorage.setItem('td-acked-runs', JSON.stringify([...current]))
+      } catch {
+        /* le stockage local peut être indisponible */
+      }
+      setAcked(new Set(rows.filter((row) => row.failed).map((row) => row.item.id)))
+      markRunAcknowledged()
+      return
+    }
+    if (!user?.id) return
+    try {
+      await acknowledgeRun(run.id, user.id)
+      setAcked(new Set(rows.filter((row) => row.failed).map((row) => row.item.id)))
+      markRunAcknowledged()
+    } catch (ackError) {
+      setError(messageForError(ackError))
+    }
   }
 
   return (
@@ -120,8 +203,24 @@ function RunDetail({ run, index, total, onPrev, onNext, onClose }) {
           >
             <Icon name="chevron-right" className="td-ic-14" />
           </button>
+          {run.githubRunUrl ? (
+            <a
+              className="td-btn-ghost"
+              href={run.githubRunUrl}
+              target="_blank"
+              rel="noreferrer"
+              title="Ouvrir l’exécution GitHub"
+            >
+              <Icon name="external-link" className="td-ic-14" />
+            </a>
+          ) : null}
           <span className="td-tc-drawer-sep" />
-          <button type="button" className="td-btn-ghost" title="Imprimer" onClick={() => window.print()}>
+          <button
+            type="button"
+            className="td-btn-ghost"
+            title="Imprimer"
+            onClick={() => window.print()}
+          >
             <Icon name="printer" className="td-ic-14" />
           </button>
           <button type="button" className="td-btn-ghost" title="Fermer" onClick={onClose}>
@@ -131,7 +230,7 @@ function RunDetail({ run, index, total, onPrev, onNext, onClose }) {
       </div>
 
       <div className="td-tc-drawer-body">
-        <h2 className="td-tc-drawer-title">{run.suite}</h2>
+        <h2 className="td-tc-drawer-title">{suiteLabel}</h2>
 
         <div className="mb-6">
           <span className={`td-tc-status-pill is-${run.status}`}>
@@ -142,51 +241,75 @@ function RunDetail({ run, index, total, onPrev, onNext, onClose }) {
             {started} · {fmtDuration(run.durationMs)} · {run.total} test
             {run.total > 1 ? 's' : ''}
           </p>
+          {run.branch ? (
+            <p className="td-tc-run-meta">
+              Branche <b>{run.branch}</b>
+              {run.commitHash ? ` · commit ${String(run.commitHash).slice(0, 7)}` : ''}
+            </p>
+          ) : null}
         </div>
 
         <div className="td-tc-tabs" role="tablist">
-          {TABS.map((t) => (
+          {TABS.map((item) => (
             <button
-              key={t.id}
+              key={item.id}
               type="button"
               role="tab"
-              aria-selected={tab === t.id}
-              className={'td-tc-tab' + (tab === t.id ? ' is-active' : '')}
-              onClick={() => setTab(t.id)}
+              aria-selected={tab === item.id}
+              className={'td-tc-tab' + (tab === item.id ? ' is-active' : '')}
+              onClick={() => setTab(item.id)}
             >
-              {t.label}
+              {item.label}
             </button>
           ))}
         </div>
 
-        <p className="td-tc-linked-note">
-          {linked.length} cas de test rattaché{linked.length > 1 ? 's' : ''} à la suite «{' '}
-          {run.suite} ».
-        </p>
-
-        {visible.length ? (
-          <div className="td-run-cases">
-            {visible.map(({ item, failed }) => (
-              <ResultCard
-                key={item.id}
-                item={item}
-                failed={failed}
-                proofOpen={proof === item.id}
-                onProof={() => setProof(proof === item.id ? null : item.id)}
-                acked={acked.has(item.id)}
-                onAck={() => acknowledge(item.id)}
-              />
-            ))}
+        {loading ? (
+          <div className="td-tc-empty">
+            <span className="td-spinner" aria-hidden="true" />
+            <span>Chargement des résultats…</span>
+          </div>
+        ) : error ? (
+          <div className="td-tc-empty">
+            <Icon name="triangle-alert" className="td-ic-20" />
+            <span>{error}</span>
           </div>
         ) : (
-          <div className="td-tc-empty">
-            <Icon name="circle-dashed" className="td-ic-20" />
-            <span>
-              {tab === 'passed'
-                ? 'Aucun test réussi pour cette exécution.'
-                : 'Aucun test échoué pour cette exécution.'}
-            </span>
-          </div>
+          <>
+            <p className="td-tc-linked-note">
+              {linkedCount} cas de test rattaché{linkedCount > 1 ? 's' : ''} à la suite «{' '}
+              {suiteLabel} ».
+            </p>
+
+            {run.errorMessage && !results.length ? (
+              <p className="td-settings-note is-error">{run.errorMessage}</p>
+            ) : null}
+
+            {visible.length ? (
+              <div className="td-run-cases">
+                {visible.map(({ item, failed }) => (
+                  <ResultCard
+                    key={item.id}
+                    item={item}
+                    failed={failed}
+                    proofOpen={proof === item.id}
+                    onProof={() => setProof(proof === item.id ? null : item.id)}
+                    acked={acked.has(item.id)}
+                    onAck={acknowledge}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="td-tc-empty">
+                <Icon name="circle-dashed" className="td-ic-20" />
+                <span>
+                  {tab === 'passed'
+                    ? 'Aucun test réussi pour cette exécution.'
+                    : 'Aucun test échoué pour cette exécution.'}
+                </span>
+              </div>
+            )}
+          </>
         )}
       </div>
     </>
@@ -194,12 +317,13 @@ function RunDetail({ run, index, total, onPrev, onNext, onClose }) {
 }
 
 export default function RunDrawer() {
-  const { run, openRun, closeRun } = useApp()
-  const index = run ? runs.findIndex((r) => r.id === run.id) : -1
+  const { run, runList, openRun, closeRun } = useApp()
+  const list = runList.length ? runList : run ? [run] : []
+  const index = run ? list.findIndex((item) => item.id === run.id) : -1
 
   const go = (delta) => {
-    const next = runs[index + delta]
-    if (next) openRun(next)
+    const next = list[index + delta]
+    if (next) openRun(next, list)
   }
 
   return (
@@ -212,8 +336,8 @@ export default function RunDrawer() {
         <RunDetail
           key={run.id}
           run={run}
-          index={index}
-          total={runs.length}
+          index={index >= 0 ? index : 0}
+          total={Math.max(1, list.length)}
           onPrev={() => go(-1)}
           onNext={() => go(1)}
           onClose={closeRun}

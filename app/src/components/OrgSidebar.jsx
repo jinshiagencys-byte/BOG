@@ -3,6 +3,7 @@
 import { NavLink } from 'react-router-dom'
 import Icon from './Icon.jsx'
 import OrgSwitcher from './OrgSwitcher.jsx'
+import UserMenu from './UserMenu.jsx'
 import { ORG_NAV_GROUPS } from '../app/nav.js'
 
 export default function OrgSidebar({ onNavigate, onClose }) {
@@ -40,14 +41,7 @@ export default function OrgSidebar({ onNavigate, onClose }) {
       </nav>
 
       <div className="td-sidebar-footer">
-        <button className="td-user-btn" type="button">
-          <span className="td-user-avatar">AJ</span>
-          <span className="td-user-info">
-            <span className="td-user-name">Agency&apos;s Jinshi</span>
-            <span className="td-user-mail">jinshiagencys@gmail.com</span>
-          </span>
-          <Icon name="chevrons-up-down" className="td-chev" />
-        </button>
+        <UserMenu />
       </div>
     </aside>
   )

@@ -8,9 +8,9 @@ import { ORG_NAV_FLAT } from '../app/nav.js'
 import { DEMO_ORG_NAME } from '../app/projects.js'
 
 export default function OrgHeader({ onToggleSidebar }) {
-  const { theme, toggleTheme, organization, currentOrg } = useApp()
+  const { theme, toggleTheme, activeOrg } = useApp()
   const location = useLocation()
-  const orgName = currentOrg === 'demo' ? DEMO_ORG_NAME : organization
+  const orgName = activeOrg?.isDemo ? DEMO_ORG_NAME : activeOrg?.name || 'Organisation'
   const current = ORG_NAV_FLAT.slice()
     .sort((a, b) => b.to.length - a.to.length)
     .find((i) => location.pathname.startsWith(i.to))

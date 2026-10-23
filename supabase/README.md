@@ -2,17 +2,24 @@
 
 ## État
 
-Les migrations sont **écrites et validées hors ligne** (PostgreSQL 17 via PGlite), mais
-**ne sont pas appliquées** à la base `Monitoring Project`. Aucune credential Supabase
-n'est configurée dans l'application pour l'instant.
+Les 6 migrations sont **appliquées** à la base `Monitoring Project`
+(`ipnepkenbozwoslrhtcj`) : 228 modèles de cas / 684 étapes, 46 policies RLS, 7 sites
+historiques conservés et aucun slug `demoproject`. Les Edge Functions `start-run`,
+`run-manifest` et `report-run` sont déployées ; les secrets `GITHUB_APP_ID` et
+`GITHUB_APP_PRIVATE_KEY` (PKCS#8) sont configurés. La GitHub App `BOG-QA` est installée
+sur `jinshiagencys-byte/BOG`.
+
+Un run de bout en bout a été validé avec l’agent OpenCode + MCP `chrome-devtools` :
+7 cas exécutés (dont 2 découverts), résultats, étapes, preuves et artefact GitHub
+ingérés par `report-run`.
 
 La validation couvre aussi l'ingestion d'un `qa_result.json` d'agent : cas découvert,
 cas du manifeste omis (repli `blocked`), preuves d'étape, `severity`, `side_effects` et
-rejeu idempotent. Les Edge Functions et le workflow sont écrits, mais pas déployés.
+rejeu idempotent.
 
-## Ordre d'application
+## Ordre d'application (déjà appliqué)
 
-Appliquer dans cet ordre, avec `supabase db push` ou dans le SQL Editor :
+Les migrations ont été appliquées dans cet ordre, avec `supabase db push` :
 
 1. `20261022120000_v2_01_orgs_projects.sql`
 2. `20261022120100_v2_02_case_templates.sql`
@@ -21,9 +28,9 @@ Appliquer dans cet ordre, avec `supabase db push` ou dans le SQL Editor :
 5. `20261022120400_v2_05_rls_policies.sql`
 6. `20261022120500_v2_06_report_run.sql`
 
-Tester d'abord sur une branche Supabase, puis sur la production. Les migrations sont
-additives : elles ne suppriment aucune donnée métier. Elles suppriment uniquement deux
-index redondants sur `crawl_reports`.
+Les migrations sont additives : elles ne suppriment aucune donnée métier. Elles
+suppriment uniquement deux index redondants sur `crawl_reports`. Pour une nouvelle
+instance, les tester d'abord sur une branche Supabase avant la production.
 
 ## Ce que font les migrations
 
@@ -106,7 +113,7 @@ Règles d'ingestion :
 
 ## Edge Functions
 
-Fichiers écrits (à déployer avec `supabase functions deploy`) :
+Fichiers déployés avec `supabase functions deploy` :
 
 - `supabase/functions/start-run/index.ts` : vérifie le JWT utilisateur, charge
   `github_integrations`, appelle `create_run_manifest` avec le `service_role`, obtient un
@@ -121,7 +128,7 @@ Fichiers écrits (à déployer avec `supabase functions deploy`) :
 Le workflow clone est `.github/workflows/antigravity-qa.yml` ; le prompt de l'agent est
 dans `.github/qa/prompt.md` (le plan est injecté depuis le manifeste).
 
-Secrets Edge à prévoir : `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`,
+Secrets Edge configurés : `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`,
 `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (fournis par Supabase), et éventuellement
 `OPENCODE_MODEL`. Le `installation_id` est stocké par organisation dans
 `github_integrations` ; aucune clé privée ni token GitHub n'est en base.
