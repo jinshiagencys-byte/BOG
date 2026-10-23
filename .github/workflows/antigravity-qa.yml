@@ -3,8 +3,9 @@ name: Antigravity QA — TestDino-like run
 # Exécution d'un run sélectionné depuis l'application.
 # L'agent est Antigravity CLI (`agy`). Son sous-agent navigateur natif `browser`
 # pilote Chrome via Chrome DevTools (CDP) : aucun MCP chrome-devtools n'est configuré.
-# Le modèle est servi par OpenCode Zen via son endpoint Gemini-compatible, avec
-# OPENCODE_API_KEY. Playwright n'est plus utilisé par ce workflow.
+# Antigravity ne parle qu'à un endpoint Gemini-compatible ; un proxy local traduit
+# Gemini <-> OpenAI Chat Completions pour utiliser les modèles OpenCode Zen
+# (DeepSeek V4.1 Flash Free, Big Pickle, Beam Free). Playwright n'est plus utilisé.
 
 on:
   workflow_dispatch:
@@ -26,9 +27,9 @@ on:
         required: true
         type: string
       model:
-        description: "Modèle Antigravity (gemini-3.8-flash-medium par défaut)"
+        description: "Modèle OpenCode (deepseek-v4.1-flash-free, big-pickle ou beam-free)"
         required: false
-        default: "gemini-3.8-flash-medium"
+        default: "deepseek-v4.1-flash-free"
         type: string
       target_url:
         description: "URL cible (facultative, sinon lue dans le manifeste)"
@@ -71,7 +72,6 @@ jobs:
           curl -fsSL https://antigravity.google/cli/install.sh | bash
           export PATH="$HOME/.local/bin:$PATH"
           agy --version
-          agy models | head -20
 
       - name: Configurer Antigravity (Gemini-compatible, navigateur natif)
         shell: bash
@@ -90,6 +90,8 @@ jobs:
                 "read_file(/home/runner/.ssh)",
                 "read_file(/home/runner/.config)",
                 "read_file(/home/runner/.local)",
+                "read_file(/proc)",
+                "read_file(/proc/)",
                 "write_file(/home/runner/.ssh)",
                 "write_file(/home/runner/.config)",
                 "write_file(/home/runner/.local)"
@@ -155,77 +157,92 @@ jobs:
         run: |
           mkdir -p trajectories videos screenshots
 
-      - name: Vérifier le fournisseur de modèle
+      - name: Normaliser le modèle OpenCode
+        id: model
         env:
-          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
-          GEMINI_API_KEY_FALLBACK: ${{ secrets.GEMINI_API_KEY }}
+          REQUESTED_MODEL: ${{ inputs.model }}
         shell: bash
         run: |
           set -euo pipefail
-          if [ -n "${OPENCODE_API_KEY:-}" ]; then
-            KEY="$OPENCODE_API_KEY"
-            BASE="https://opencode.ai/inference/google"
-            PROVIDER="OpenCode Zen (Gemini-compatible)"
-          elif [ -n "${GEMINI_API_KEY_FALLBACK:-}" ]; then
-            KEY="$GEMINI_API_KEY_FALLBACK"
-            BASE="https://generativelanguage.googleapis.com"
-            PROVIDER="Google Gemini API"
-          else
-            echo "::error::Secret OPENCODE_API_KEY (ou GEMINI_API_KEY) manquant"
-            exit 1
-          fi
-          URL="$BASE/v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse"
-          HTTP=$(curl -sS --max-time 30 -o /tmp/model_preflight.json -w '%{http_code}' \
+          MODEL=$(printf '%s' "${REQUESTED_MODEL:-}" | tr '[:upper:]' '[:lower:]' | xargs)
+          case "$MODEL" in
+            deepseek-v4.1-flash-free|opencode/deepseek-v4.1-flash-free)
+              MODEL="deepseek-v4.1-flash-free" ;;
+            big-pickle|big\ pickle|opencode/big-pickle)
+              MODEL="big-pickle" ;;
+            beam|beam-free|opencode/beam|opencode/beam-free)
+              MODEL="beam-free" ;;
+            *)
+              echo "::warning::Modèle '$REQUESTED_MODEL' inconnu, repli sur deepseek-v4.1-flash-free"
+              MODEL="deepseek-v4.1-flash-free" ;;
+          esac
+          echo "name=$MODEL" >> "$GITHUB_OUTPUT"
+          echo "🧠 Modèle OpenCode : $MODEL"
+
+      - name: Vérifier l'accès au modèle OpenCode
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          AI_MODEL: ${{ steps.model.outputs.name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${OPENCODE_API_KEY:?secret OPENCODE_API_KEY requis}"
+          URL="https://opencode.ai/inference/openai/v1/chat/completions"
+          HTTP=$(curl -sS --max-time 60 -o /tmp/model_preflight.json -w '%{http_code}' \
             -X POST "$URL" \
-            -H "x-goog-api-key: $KEY" \
+            -H "Authorization: Bearer $OPENCODE_API_KEY" \
             -H "Content-Type: application/json" \
-            --data '{"contents":[{"parts":[{"text":"ping"}],"role":"user"}],"generationConfig":{"maxOutputTokens":1}}')
-          if [ "$HTTP" != "200" ]; then
-            echo "::error::Preflight modèle HTTP $HTTP via $PROVIDER"
-            head -c 600 /tmp/model_preflight.json || true
+            --data "{\"model\":\"$AI_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],\"max_tokens\":8,\"stream\":false}")
+          if [ "$HTTP" != "200" ] || ! jq -e '.choices | type == "array" and length > 0' /tmp/model_preflight.json >/dev/null 2>&1; then
+            echo "::error::Preflight modèle OpenCode HTTP $HTTP pour $AI_MODEL"
+            head -c 800 /tmp/model_preflight.json || true
             exit 1
           fi
-          echo "✓ Fournisseur disponible : $PROVIDER"
+          echo "✓ Modèle OpenCode disponible : $AI_MODEL"
+
+      - name: Démarrer le proxy Gemini -> OpenCode
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          OPENCODE_MODEL: ${{ steps.model.outputs.name }}
+          OPENCODE_TITLE_MODEL: deepseek-v4.1-flash-free
+          OPENCODE_SAFETY_MODEL: deepseek-v4.1-flash-free
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${OPENCODE_API_KEY:?secret OPENCODE_API_KEY requis}"
+          rm -f proxy.log proxy.pid
+          nohup node .github/qa/opencode-gemini-proxy.mjs > proxy.log 2>&1 &
+          echo $! > proxy.pid
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8787/health >/tmp/proxy_health.json 2>/dev/null; then
+              cat /tmp/proxy_health.json; echo
+              exit 0
+            fi
+            sleep 1
+          done
+          cat proxy.log || true
+          echo "::error::Le proxy OpenCode n'a pas démarré"
+          exit 1
 
       - name: Exécuter l'agent QA (Antigravity natif + OpenCode)
         id: qa_agent
         env:
           TARGET_URL: ${{ steps.prompt.outputs.target_url }}
-          AI_MODEL: ${{ inputs.model }}
-          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
-          GEMINI_API_KEY_FALLBACK: ${{ secrets.GEMINI_API_KEY }}
+          AI_MODEL: ${{ steps.model.outputs.name }}
+          # Antigravity ne reçoit jamais la vraie clé OpenCode : seul le proxy
+          # local la détient. Cette clé factice satisfait son SDK Gemini.
+          GEMINI_API_KEY: local-proxy-key
+          GOOGLE_GEMINI_BASE_URL: http://127.0.0.1:8787
         shell: bash
         run: |
           set +e
           export PATH="$HOME/.local/bin:$PATH"
           rm -f qa_result.json qa_agent.log qa_agent_agy.log
-
-          case "$AI_MODEL" in
-            gemini-4-argon|gemini-3.8-flash|gemini-3.8-flash-high|gemini-3.8-flash-medium|gemini-3.8-flash-low) ;;
-            *)
-              echo "::warning::Modèle '$AI_MODEL' non pris en charge, repli sur gemini-3.8-flash-medium"
-              AI_MODEL="gemini-3.8-flash-medium"
-              ;;
-          esac
           echo "model=$AI_MODEL" >> "$GITHUB_OUTPUT"
 
-          if [ -n "${OPENCODE_API_KEY:-}" ]; then
-            export GEMINI_API_KEY="$OPENCODE_API_KEY"
-            export GOOGLE_GEMINI_BASE_URL="https://opencode.ai/inference/google"
-            echo "🧠 Modèle Antigravity : $AI_MODEL (OpenCode Zen)"
-          else
-            export GEMINI_API_KEY="${GEMINI_API_KEY_FALLBACK:-}"
-            unset GOOGLE_GEMINI_BASE_URL
-            echo "🧠 Modèle Antigravity : $AI_MODEL (Google Gemini API)"
-          fi
-          if [ -z "${GEMINI_API_KEY:-}" ]; then
-            echo "::error::Aucune clé de modèle disponible"
-            echo "exit_code=1" >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-
-          # Ne laisse pas les secrets dans l'environnement des outils de l'agent.
-          unset OPENCODE_API_KEY GEMINI_API_KEY_FALLBACK
+          ANTIGRAVITY_MODEL="gemini-3.8-flash-medium"
+          echo "🧠 Modèle OpenCode : $AI_MODEL (proxy Gemini local)"
+          echo "🧩 Slug Antigravity : $ANTIGRAVITY_MODEL"
 
           QA_PROMPT=$(cat qa_prompt.txt)
           printf '%s' "$QA_PROMPT" > trajectories/qa_prompt.txt
@@ -237,7 +254,7 @@ jobs:
           # suffit pour write_file et le sous-agent browser, tout en gardant
           # l'interdiction du shell.
           timeout 112m agy -p "$QA_PROMPT" \
-            --model "$AI_MODEL" \
+            --model "$ANTIGRAVITY_MODEL" \
             --mode auto \
             --print-timeout 105m \
             --log-file "$PWD/qa_agent_agy.log" \
@@ -246,6 +263,17 @@ jobs:
           echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
           if [ "$EXIT_CODE" -ne 0 ]; then
             echo "::warning::agy s'est terminé avec le code $EXIT_CODE"
+          fi
+
+      - name: Arrêter le proxy OpenCode
+        if: always()
+        shell: bash
+        run: |
+          if [ -f proxy.pid ]; then
+            PID=$(cat proxy.pid)
+            kill "$PID" 2>/dev/null || true
+            sleep 1
+            kill -9 "$PID" 2>/dev/null || true
           fi
 
       - name: Valider et normaliser le rapport structuré
@@ -358,7 +386,7 @@ jobs:
           REPORT_URL: ${{ inputs.report_url }}
           RUN_TOKEN: ${{ inputs.run_token }}
           QA_RUN_ID: ${{ inputs.qa_run_id }}
-          AI_MODEL: ${{ steps.qa_agent.outputs.model || inputs.model }}
+          AI_MODEL: ${{ steps.qa_agent.outputs.model || steps.model.outputs.name }}
           GH_RUN_ID: ${{ github.run_id }}
           GH_RUN_ATTEMPT: ${{ github.run_attempt }}
           GH_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -433,6 +461,7 @@ jobs:
             screenshots/
             qa_agent.log
             qa_agent_agy.log
+            proxy.log
             qa_result.json
             run_manifest.json
             plan.txt

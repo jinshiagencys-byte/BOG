@@ -17,6 +17,29 @@ type StartRunBody = {
 
 const VALID_TRIGGERS = new Set(['manual', 'schedule', 'new_site', 'ci']);
 
+// Modèles OpenCode Zen utilisables par Antigravity via le proxy Gemini local.
+const OPENCODE_MODELS = new Set([
+  'deepseek-v4.1-flash-free',
+  'big-pickle',
+  'beam-free',
+]);
+const MODEL_ALIASES = new Map([
+  ['deepseek-v4.1-flash-free', 'deepseek-v4.1-flash-free'],
+  ['deepseek', 'deepseek-v4.1-flash-free'],
+  ['big-pickle', 'big-pickle'],
+  ['big pickle', 'big-pickle'],
+  ['pickle', 'big-pickle'],
+  ['beam', 'beam-free'],
+  ['beam-free', 'beam-free'],
+]);
+
+function normalizeOpenCodeModel(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const raw = value.trim().toLowerCase().replace(/^opencode[/:]/, '');
+  const model = MODEL_ALIASES.get(raw);
+  return model && OPENCODE_MODELS.has(model) ? model : null;
+}
+
 Deno.serve(async (req) => {
   const options = preflight(req);
   if (options) return options;
@@ -128,16 +151,12 @@ Deno.serve(async (req) => {
   const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
   const manifestUrl = `${supabaseUrl}/functions/v1/run-manifest?run_id=${runId}`;
   const reportUrl = `${supabaseUrl}/functions/v1/report-run`;
-  const requestedModel = typeof body.model === 'string' ? body.model.trim() : '';
-  const configuredModel = Deno.env.get('ANTIGRAVITY_MODEL')
-    ?? Deno.env.get('OPENCODE_MODEL')
-    ?? '';
-  const defaultModel = configuredModel.startsWith('gemini-')
-    ? configuredModel
-    : 'gemini-3.8-flash-medium';
-  const model = requestedModel.startsWith('gemini-')
-    ? requestedModel.slice(0, 80)
-    : defaultModel;
+  const configuredModel = normalizeOpenCodeModel(
+    Deno.env.get('OPENCODE_MODEL') ?? Deno.env.get('ANTIGRAVITY_MODEL'),
+  );
+  const model = normalizeOpenCodeModel(body.model)
+    ?? configuredModel
+    ?? 'deepseek-v4.1-flash-free';
 
   try {
     const githubToken = await installationToken(Number(integration.installation_id));
