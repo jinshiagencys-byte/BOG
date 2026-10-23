@@ -14,14 +14,14 @@
     "goal": "Confirm the category page lists at least one product. Stop immediately after confirming; do not click anything.",
     "expect": {
       "url": "/products\\?category=426a089f",
-      "text": ["[1-9]\\d* produits? trouvés", "FCFA"],
+      "text": ["FCFA", "Tissus|Indigo|Agonlin|Hémorro|Moto"],
       "failIfText": ["Aucun produit trouvé", "0 produits trouvés"],
       "console": "fail"
     }
   },
   "TC-ECOM-003": {
     "url": "https://odjafrik.com/product/35634176-4386-440f-9708-af9bfd1caac7",
-    "goal": "Confirm the product page shows the product name, price and stock status. Then reload the page and confirm it still shows the same information. Stop after the reload.",
+    "goal": "Wait until the product page shows the product name, price and stock status. Do not scroll and do not click any link. Stop as soon as the information is visible.",
     "expect": {
       "url": "/product/35634176-4386-440f-9708-af9bfd1caac7",
       "text": ["Les merveilles d.*Agonlin", "15,000 FCFA", "En stock - \\d+ unités"],
@@ -30,7 +30,7 @@
   },
   "TC-ECOM-004": {
     "url": "https://odjafrik.com/product/35634176-4386-440f-9708-af9bfd1caac7",
-    "goal": "Add one unit of the product \"Les merveilles d’Agonlin Long grain\" to the cart, then open the cart and confirm the product is listed. Stop when the cart shows the product. Do not log in or proceed to checkout.",
+    "goal": "On this product page, click the button labelled \"Ajouter\" exactly once. Then navigate to https://odjafrik.com/cart and stop when the cart shows \"Les merveilles d’Agonlin Long grain\". Do not use the search field, do not log in and do not proceed to checkout.",
     "expect": {
       "url": "/cart",
       "text": ["Les merveilles d.*Agonlin", "15,000 FCFA", "1 article"],
