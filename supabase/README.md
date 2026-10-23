@@ -9,9 +9,10 @@ historiques conservés et aucun slug `demoproject`. Les Edge Functions `start-ru
 `GITHUB_APP_PRIVATE_KEY` (PKCS#8) sont configurés. La GitHub App `BOG-QA` est installée
 sur `jinshiagencys-byte/BOG`.
 
-Un run de bout en bout a été validé avec l’agent OpenCode + MCP `chrome-devtools` :
-7 cas exécutés (dont 2 découverts), résultats, étapes, preuves et artefact GitHub
-ingérés par `report-run`.
+Un premier run de bout en bout a été validé avec l’ancien agent OpenCode + MCP
+`chrome-devtools` : 7 cas exécutés (dont 2 découverts), résultats, étapes, preuves et
+artefact GitHub ingérés par `report-run`. Le workflow utilise désormais **Antigravity CLI**
+et son sous-agent navigateur natif, avec le modèle servi par OpenCode Zen.
 
 La validation couvre aussi l'ingestion d'un `qa_result.json` d'agent : cas découvert,
 cas du manifeste omis (repli `blocked`), preuves d'étape, `severity`, `side_effects` et
@@ -78,11 +79,24 @@ Le script lit `app/src/data/casePacks.js` et réécrit
 
 ## Exécution des runs — agent Antigravity
 
-Le moteur d'exécution n'est **pas Playwright**. Playwright n'est installé dans le workflow
-que pour fournir Chromium et ses dépendances système. Les tests sont exécutés par un
-**agent QA OpenCode** (`opencode-ai`) connecté au MCP **`chrome-devtools`**, qui pilote
-Chrome headless, explore le site, exécute les cas en langage naturel et produit
-`qa_result.json`.
+Le moteur d'exécution n'est **pas Playwright**. Les tests sont exécutés par
+**Antigravity CLI** (`agy`) et son sous-agent navigateur natif `browser`, qui pilote Chrome
+via Chrome DevTools (CDP). Aucun MCP `chrome-devtools` n'est configuré et Playwright n'est
+plus utilisé par le workflow. L'agent principal coordonne les lots de cas, agrège les
+observations du sous-agent et écrit `qa_result.json`.
+
+Le modèle est servi par **OpenCode Zen** via son endpoint Gemini-compatible :
+
+```text
+GEMINI_API_KEY=$OPENCODE_API_KEY
+GOOGLE_GEMINI_BASE_URL=https://opencode.ai/inference/google
+modelProvider=gemini (dans ~/.gemini/antigravity-cli/settings.json)
+```
+
+Le workflow vérifie d'abord l'accès au modèle, puis lance `agy -p` avec
+`--model gemini-3.8-flash-medium`. Le sous-agent `browser` est déclenché par la commande
+`/browser` en tête du prompt. Si `OPENCODE_API_KEY` est absent, le workflow peut retomber
+sur `GEMINI_API_KEY` avec l'endpoint Google standard.
 
 Chaîne complète :
 
@@ -130,9 +144,15 @@ dans `.github/qa/prompt.md` (le plan est injecté depuis le manifeste).
 
 Secrets Edge configurés : `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`,
 `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (fournis par Supabase), et éventuellement
-`OPENCODE_MODEL`. Le `installation_id` est stocké par organisation dans
+`ANTIGRAVITY_MODEL`. L'ancien nom `OPENCODE_MODEL` reste lu uniquement s'il contient déjà
+un modèle `gemini-*`. Le `installation_id` est stocké par organisation dans
 `github_integrations` ; aucune clé privée ni token GitHub n'est en base.
 `github_integrations.workflow_file` vaut par défaut `antigravity-qa.yml`.
+
+Côté GitHub Actions, le secret requis est `OPENCODE_API_KEY` (endpoint Gemini-compatible
+d'OpenCode Zen). `GEMINI_API_KEY` reste un fallback optionnel pour l'endpoint Google
+standard. Le secret `GITHUB_TOKEN` fourni par Actions n'est pas utilisé pour déclencher le
+workflow : `start-run` passe par la GitHub App.
 
 La clé privée téléchargée depuis GitHub est au format PKCS#1 (`BEGIN RSA PRIVATE KEY`).
 `jose.importPKCS8` attend du PKCS#8 : la convertir avant de créer le secret Edge :

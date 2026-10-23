@@ -128,9 +128,16 @@ Deno.serve(async (req) => {
   const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
   const manifestUrl = `${supabaseUrl}/functions/v1/run-manifest?run_id=${runId}`;
   const reportUrl = `${supabaseUrl}/functions/v1/report-run`;
-  const model = (typeof body.model === 'string' && body.model.trim())
-    ? body.model.trim().slice(0, 80)
-    : (Deno.env.get('OPENCODE_MODEL') ?? 'opencode:big-pickle');
+  const requestedModel = typeof body.model === 'string' ? body.model.trim() : '';
+  const configuredModel = Deno.env.get('ANTIGRAVITY_MODEL')
+    ?? Deno.env.get('OPENCODE_MODEL')
+    ?? '';
+  const defaultModel = configuredModel.startsWith('gemini-')
+    ? configuredModel
+    : 'gemini-3.8-flash-medium';
+  const model = requestedModel.startsWith('gemini-')
+    ? requestedModel.slice(0, 80)
+    : defaultModel;
 
   try {
     const githubToken = await installationToken(Number(integration.installation_id));

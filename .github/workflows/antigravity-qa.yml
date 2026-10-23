@@ -1,8 +1,10 @@
 name: Antigravity QA — TestDino-like run
 
 # Exécution d'un run sélectionné depuis l'application.
-# Le moteur est un agent OpenCode + MCP chrome-devtools qui pilote Chrome.
-# Playwright n'est installé que pour les dépendances navigateur, pas comme runner.
+# L'agent est Antigravity CLI (`agy`). Son sous-agent navigateur natif `browser`
+# pilote Chrome via Chrome DevTools (CDP) : aucun MCP chrome-devtools n'est configuré.
+# Le modèle est servi par OpenCode Zen via son endpoint Gemini-compatible, avec
+# OPENCODE_API_KEY. Playwright n'est plus utilisé par ce workflow.
 
 on:
   workflow_dispatch:
@@ -24,9 +26,9 @@ on:
         required: true
         type: string
       model:
-        description: "Modèle IA de l'agent"
+        description: "Modèle Antigravity (gemini-3.8-flash-medium par défaut)"
         required: false
-        default: "opencode:big-pickle"
+        default: "gemini-3.8-flash-medium"
         type: string
       target_url:
         description: "URL cible (facultative, sinon lue dans le manifeste)"
@@ -36,11 +38,6 @@ on:
 permissions:
   contents: read
 
-env:
-  NODE_VERSION: "22"
-  GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-  OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
-
 jobs:
   antigravity-qa:
     runs-on: ubuntu-latest
@@ -49,18 +46,58 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Installer Chromium et les dépendances système (Playwright n'est pas le runner)
+      - name: Installer Chrome pour le sous-agent navigateur Antigravity
+        shell: bash
         run: |
-          npx playwright install --with-deps chromium
+          set -euo pipefail
+          if ! command -v google-chrome >/dev/null 2>&1 \
+            && ! command -v google-chrome-stable >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y wget
+            wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
+              -O /tmp/google-chrome.deb
+            sudo apt-get install -y /tmp/google-chrome.deb
+          fi
+          if command -v google-chrome >/dev/null 2>&1; then
+            google-chrome --version
+          else
+            google-chrome-stable --version
+          fi
 
-      - name: Installer OpenCode CLI
+      - name: Installer Antigravity CLI
+        shell: bash
         run: |
-          npm install -g opencode-ai
+          set -euo pipefail
+          curl -fsSL https://antigravity.google/cli/install.sh | bash
+          export PATH="$HOME/.local/bin:$PATH"
+          agy --version
+          agy models | head -20
+
+      - name: Configurer Antigravity (Gemini-compatible, navigateur natif)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.gemini/antigravity-cli"
+          cat > "$HOME/.gemini/antigravity-cli/settings.json" <<'EOF'
+          {
+            "modelProvider": "gemini",
+            "toolPermission": "always-proceed",
+            "enableTerminalSandbox": true,
+            "permissions": {
+              "deny": [
+                "command()",
+                "unsandboxed()",
+                "read_file(/home/runner/.ssh)",
+                "read_file(/home/runner/.config)",
+                "read_file(/home/runner/.local)",
+                "write_file(/home/runner/.ssh)",
+                "write_file(/home/runner/.config)",
+                "write_file(/home/runner/.local)"
+              ]
+            }
+          }
+          EOF
+          cat "$HOME/.gemini/antigravity-cli/settings.json"
 
       - name: Récupérer le manifeste du run
         env:
@@ -112,71 +149,104 @@ jobs:
           PY
 
           echo "target_url=$TARGET_URL" >> "$GITHUB_OUTPUT"
-          echo "Prompt QA : $(wc -c < qa_prompt.txt) caractères"
+          echo "Prompt QA : $(wc -c < qa_prompt.txt) caractères, $(jq '.cases | length' run_manifest.json) cas"
 
       - name: Dossiers de preuves
         run: |
           mkdir -p trajectories videos screenshots
 
-      - name: Exécuter l'agent QA (chrome-devtools MCP)
+      - name: Vérifier le fournisseur de modèle
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          GEMINI_API_KEY_FALLBACK: ${{ secrets.GEMINI_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${OPENCODE_API_KEY:-}" ]; then
+            KEY="$OPENCODE_API_KEY"
+            BASE="https://opencode.ai/inference/google"
+            PROVIDER="OpenCode Zen (Gemini-compatible)"
+          elif [ -n "${GEMINI_API_KEY_FALLBACK:-}" ]; then
+            KEY="$GEMINI_API_KEY_FALLBACK"
+            BASE="https://generativelanguage.googleapis.com"
+            PROVIDER="Google Gemini API"
+          else
+            echo "::error::Secret OPENCODE_API_KEY (ou GEMINI_API_KEY) manquant"
+            exit 1
+          fi
+          URL="$BASE/v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse"
+          HTTP=$(curl -sS --max-time 30 -o /tmp/model_preflight.json -w '%{http_code}' \
+            -X POST "$URL" \
+            -H "x-goog-api-key: $KEY" \
+            -H "Content-Type: application/json" \
+            --data '{"contents":[{"parts":[{"text":"ping"}],"role":"user"}],"generationConfig":{"maxOutputTokens":1}}')
+          if [ "$HTTP" != "200" ]; then
+            echo "::error::Preflight modèle HTTP $HTTP via $PROVIDER"
+            head -c 600 /tmp/model_preflight.json || true
+            exit 1
+          fi
+          echo "✓ Fournisseur disponible : $PROVIDER"
+
+      - name: Exécuter l'agent QA (Antigravity natif + OpenCode)
         id: qa_agent
         env:
           TARGET_URL: ${{ steps.prompt.outputs.target_url }}
           AI_MODEL: ${{ inputs.model }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          GEMINI_API_KEY_FALLBACK: ${{ secrets.GEMINI_API_KEY }}
         shell: bash
         run: |
           set +e
-          rm -f qa_result.json qa_agent.log
-          echo "🎯 Cible : $TARGET_URL"
-          echo "🧠 Modèle IA : $AI_MODEL"
-
-          google-chrome-stable --headless --no-sandbox --disable-gpu \
-            --user-data-dir=/tmp/chrome-qa --remote-debugging-port=9222 "$TARGET_URL" &
-          CHROME_PID=$!
-
-          for i in $(seq 1 30); do
-            curl -fs http://127.0.0.1:9222/json/version >/dev/null && break
-            sleep 1
-          done
-          if curl -fs http://127.0.0.1:9222/json/version >/dev/null; then
-            echo "✓ Chrome DevTools prêt sur :9222"
-          else
-            echo "::warning::Chrome ne répond pas sur 9222 après 30 s"
-          fi
-
-          cat > opencode.json << 'EOF'
-          {
-            "$schema": "https://opencode.ai/config.json",
-            "mcp": {
-              "chrome-devtools": {
-                "type": "local",
-                "command": ["npx", "-y", "chrome-devtools-mcp@latest", "--browserUrl", "http://127.0.0.1:9222"],
-                "enabled": true
-              }
-            }
-          }
-          EOF
-          echo "🔌 MCP configurés :"
-          opencode mcp list 2>&1 | head -20 || true
+          export PATH="$HOME/.local/bin:$PATH"
+          rm -f qa_result.json qa_agent.log qa_agent_agy.log
 
           case "$AI_MODEL" in
-            opencode:*) OC_MODEL="opencode/${AI_MODEL#opencode:}" ;;
-            gemini-*)   OC_MODEL="google/${AI_MODEL}" ;;
+            gemini-4-argon|gemini-3.8-flash|gemini-3.8-flash-high|gemini-3.8-flash-medium|gemini-3.8-flash-low) ;;
             *)
-              echo "::warning::Modèle '$AI_MODEL' non pris en charge, repli sur opencode/big-pickle"
-              OC_MODEL="opencode/big-pickle"
+              echo "::warning::Modèle '$AI_MODEL' non pris en charge, repli sur gemini-3.8-flash-medium"
+              AI_MODEL="gemini-3.8-flash-medium"
               ;;
           esac
-          export GOOGLE_GENERATIVE_AI_API_KEY="${GOOGLE_API_KEY:-}"
-          echo "oc_model=$OC_MODEL" >> "$GITHUB_OUTPUT"
-          echo "🔧 Modèle opencode : $OC_MODEL"
+          echo "model=$AI_MODEL" >> "$GITHUB_OUTPUT"
+
+          if [ -n "${OPENCODE_API_KEY:-}" ]; then
+            export GEMINI_API_KEY="$OPENCODE_API_KEY"
+            export GOOGLE_GEMINI_BASE_URL="https://opencode.ai/inference/google"
+            echo "🧠 Modèle Antigravity : $AI_MODEL (OpenCode Zen)"
+          else
+            export GEMINI_API_KEY="${GEMINI_API_KEY_FALLBACK:-}"
+            unset GOOGLE_GEMINI_BASE_URL
+            echo "🧠 Modèle Antigravity : $AI_MODEL (Google Gemini API)"
+          fi
+          if [ -z "${GEMINI_API_KEY:-}" ]; then
+            echo "::error::Aucune clé de modèle disponible"
+            echo "exit_code=1" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          # Ne laisse pas les secrets dans l'environnement des outils de l'agent.
+          unset OPENCODE_API_KEY GEMINI_API_KEY_FALLBACK
 
           QA_PROMPT=$(cat qa_prompt.txt)
           printf '%s' "$QA_PROMPT" > trajectories/qa_prompt.txt
-          opencode run -m "$OC_MODEL" "$QA_PROMPT" 2>&1 | tee qa_agent.log
+          echo "🎯 Cible : $TARGET_URL"
+          echo "🌐 Sous-agent : browser (Chrome DevTools natif Antigravity)"
+
+          # Pas de --dangerously-skip-permissions : il contourne aussi les règles
+          # deny et autoriserait run_command. `toolPermission: always-proceed`
+          # suffit pour write_file et le sous-agent browser, tout en gardant
+          # l'interdiction du shell.
+          timeout 112m agy -p "$QA_PROMPT" \
+            --model "$AI_MODEL" \
+            --mode auto \
+            --print-timeout 105m \
+            --log-file "$PWD/qa_agent_agy.log" \
+            2>&1 | tee qa_agent.log
           EXIT_CODE=${PIPESTATUS[0]}
-          kill $CHROME_PID 2>/dev/null || true
           echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
+          if [ "$EXIT_CODE" -ne 0 ]; then
+            echo "::warning::agy s'est terminé avec le code $EXIT_CODE"
+          fi
 
       - name: Valider et normaliser le rapport structuré
         id: report
@@ -288,7 +358,7 @@ jobs:
           REPORT_URL: ${{ inputs.report_url }}
           RUN_TOKEN: ${{ inputs.run_token }}
           QA_RUN_ID: ${{ inputs.qa_run_id }}
-          AI_MODEL: ${{ inputs.model }}
+          AI_MODEL: ${{ steps.qa_agent.outputs.model || inputs.model }}
           GH_RUN_ID: ${{ github.run_id }}
           GH_RUN_ATTEMPT: ${{ github.run_attempt }}
           GH_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -362,6 +432,7 @@ jobs:
             videos/
             screenshots/
             qa_agent.log
+            qa_agent_agy.log
             qa_result.json
             run_manifest.json
             plan.txt
