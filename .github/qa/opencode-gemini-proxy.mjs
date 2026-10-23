@@ -100,7 +100,11 @@ const COMPAT_TOOLS = [
 ]
 
 function authorizationFor(model) {
-  return FREE_MODELS.has(model) ? 'Bearer public' : `Bearer ${API_KEY || 'public'}`
+  // Si une clé OpenCode est fournie (compte authentifié), elle est utilisée
+  // pour tous les modèles, y compris les modèles gratuits : cela rattache le
+  // quota au compte au lieu du credential public anonyme.
+  if (API_KEY) return `Bearer ${API_KEY}`
+  return 'Bearer public'
 }
 
 function upstreamHeaders(model) {
@@ -712,7 +716,7 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, '127.0.0.1', () => {
   log(`listening on 127.0.0.1:${PORT}`)
-  log(`main=${MAIN_MODEL} title=${TITLE_MODEL} safety=${SAFETY_MODEL}`)
+  log(`main=${MAIN_MODEL} title=${TITLE_MODEL} safety=${SAFETY_MODEL} auth=${API_KEY ? 'account' : 'public'}`)
   log(`upstream=${UPSTREAM_URL}`)
 })
 

@@ -93,10 +93,10 @@ Gemini (`streamGenerateContent`, outils, `functionResponse`) vers l'endpoint Ope
 Completions d'OpenCode Zen, puis retraduit le flux SSE (texte et `tool_calls`) en Gemini.
 Antigravity ne reçoit qu'une clé factice et `GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:8787`.
 Le proxy applique le contrat d'identité du client OpenCode officiel (User-Agent,
-en-têtes `x-opencode-*`, identifiants `ses_`/`msg_`, flux SSE et tools non vides) puis
-utilise le credential public `Bearer public` pour les modèles gratuits. La clé
-`OPENCODE_API_KEY` n'est donc plus nécessaire pour ces modèles ; elle reste utilisée si
-un modèle payant est sélectionné.
+en-têtes `x-opencode-*`, identifiants `ses_`/`msg_`, flux SSE et tools non vides). Sans
+clé, il utilise le credential public `Bearer public` pour les modèles gratuits. Si
+`OPENCODE_API_KEY` est fournie (secret GitHub Actions), elle est utilisée pour tous les
+modèles, y compris gratuits, afin de rattacher le quota au compte authentifié.
 
 Modèles OpenCode sélectionnables : `big-pickle` (défaut), `deepseek-v4.1-flash-free` et
 `beam-free`. Le slug Gemini `gemini-3.8-flash-medium` n'est qu'un véhicule protocolaire :
@@ -162,10 +162,11 @@ Secrets Edge configurés : `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`,
 privée ni token GitHub n'est en base. `github_integrations.workflow_file` vaut par défaut
 `antigravity-qa.yml`.
 
-Côté GitHub Actions, `OPENCODE_API_KEY` reste optionnel : les modèles gratuits utilisent
-le credential public du client OpenCode à travers le proxy local. `GEMINI_API_KEY` n'est
-plus utilisé. Le secret `GITHUB_TOKEN` fourni par Actions n'est pas utilisé pour
-déclencher le workflow : `start-run` passe par la GitHub App.
+Côté GitHub Actions, `OPENCODE_API_KEY` est optionnelle : sans elle, les modèles gratuits
+utilisent le credential public du client OpenCode à travers le proxy local ; avec elle,
+le quota est celui du compte associé. `GEMINI_API_KEY` n'est plus utilisé. Le secret
+`GITHUB_TOKEN` fourni par Actions n'est pas utilisé pour déclencher le workflow :
+`start-run` passe par la GitHub App.
 
 La clé privée téléchargée depuis GitHub est au format PKCS#1 (`BEGIN RSA PRIVATE KEY`).
 `jose.importPKCS8` attend du PKCS#8 : la convertir avant de créer le secret Edge :

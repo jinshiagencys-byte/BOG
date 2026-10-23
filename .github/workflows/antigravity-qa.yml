@@ -229,6 +229,7 @@ jobs:
           OPENCODE_MODEL: ${{ steps.model.outputs.name }}
           OPENCODE_TITLE_MODEL: big-pickle
           OPENCODE_SAFETY_MODEL: big-pickle
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         shell: bash
         run: |
           set -euo pipefail
