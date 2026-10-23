@@ -72,9 +72,13 @@ jobs:
         run: |
           set -euo pipefail
           CHROME_BIN=$(command -v google-chrome || command -v google-chrome-stable)
-          export CHROME_PROFILE="$HOME/.config/google-chrome"
-          rm -rf "$CHROME_PROFILE"
-          mkdir -p "$CHROME_PROFILE"
+          # Chrome >= 136 refuse le debug distant sur son profil par défaut.
+          # On utilise donc un profil dédié, puis on publie son DevToolsActivePort
+          # dans le chemin par défaut lu par `chrome-devtools-mcp --autoConnect`.
+          export CHROME_PROFILE="${RUNNER_TEMP:-/tmp}/chrome-qa-profile"
+          export CHROME_DISCOVERY_DIR="$HOME/.config/google-chrome"
+          rm -rf "$CHROME_PROFILE" "$CHROME_DISCOVERY_DIR"
+          mkdir -p "$CHROME_PROFILE" "$CHROME_DISCOVERY_DIR"
           rm -f chrome.log chrome.pid
           nohup "$CHROME_BIN" \
             --headless=new \
@@ -91,6 +95,7 @@ jobs:
             if [ -s "$CHROME_PROFILE/DevToolsActivePort" ]; then
               PORT=$(head -n1 "$CHROME_PROFILE/DevToolsActivePort")
               if curl -fsS "http://127.0.0.1:$PORT/json/version" >/tmp/chrome_version.json 2>/dev/null; then
+                cp "$CHROME_PROFILE/DevToolsActivePort" "$CHROME_DISCOVERY_DIR/DevToolsActivePort"
                 cat /tmp/chrome_version.json; echo
                 READY=1
                 break
@@ -271,6 +276,9 @@ jobs:
         run: |
           set +e
           export PATH="$HOME/.local/bin:$PATH"
+          # `chrome-devtools-mcp --autoConnect` lit le DevToolsActivePort de ce
+          # répertoire ; on le fixe explicitement pour rester aligné avec Chrome.
+          export CHROME_CONFIG_HOME="$HOME/.config"
           rm -f qa_result.json qa_agent.log qa_agent_agy.log
           echo "model=$AI_MODEL" >> "$GITHUB_OUTPUT"
 
@@ -320,6 +328,7 @@ jobs:
             sleep 1
             kill -9 "$PID" 2>/dev/null || true
           fi
+          rm -f "$HOME/.config/google-chrome/DevToolsActivePort" 2>/dev/null || true
 
       - name: Valider et normaliser le rapport structuré
         id: report
