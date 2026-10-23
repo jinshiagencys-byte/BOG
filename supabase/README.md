@@ -81,7 +81,9 @@ Le script lit `app/src/data/casePacks.js` et réécrit
 
 Le moteur d'exécution n'est **pas Playwright**. Les tests sont exécutés par
 **Antigravity CLI** (`agy`) et son sous-agent navigateur natif `browser`, qui pilote Chrome
-via Chrome DevTools (CDP). Aucun MCP `chrome-devtools` n'est configuré et Playwright n'est
+via Chrome DevTools (CDP). Le workflow lance Chrome en mode headless avec
+`--remote-debugging-port=0` et le profil `$HOME/.config/google-chrome` ; le sous-agent
+s'y connecte via `--autoConnect`. Aucun MCP n'est configuré à la main et Playwright n'est
 plus utilisé par le workflow. L'agent principal coordonne les lots de cas, agrège les
 observations du sous-agent et écrit `qa_result.json`.
 
@@ -103,7 +105,10 @@ d'Antigravity sont envoyées à `big-pickle`.
 
 Le workflow démarre le proxy, vérifie l'accès au modèle via `/preflight`, puis lance
 `agy -p`. Le sous-agent `browser` est déclenché par la commande `/browser` en tête du
-prompt. Il n'y a plus de repli sur `GEMINI_API_KEY` ni sur l'endpoint Google standard.
+prompt. Après chaque `invoke_subagent`, l'agent principal envoie immédiatement un
+`send_message` au sous-agent pour maintenir la session active pendant son démarrage ;
+sans cela, `agy -p` peut terminer avant que le navigateur ne soit connecté. Il n'y a plus
+de repli sur `GEMINI_API_KEY` ni sur l'endpoint Google standard.
 
 Chaîne complète :
 

@@ -2,7 +2,8 @@ name: Antigravity QA — TestDino-like run
 
 # Exécution d'un run sélectionné depuis l'application.
 # L'agent est Antigravity CLI (`agy`). Son sous-agent navigateur natif `browser`
-# pilote Chrome via Chrome DevTools (CDP) : aucun MCP chrome-devtools n'est configuré.
+# utilise son MCP chrome-devtools interne en `--autoConnect` vers un Chrome lancé
+# avec CDP par ce workflow.
 # Antigravity ne parle qu'à un endpoint Gemini-compatible ; un proxy local traduit
 # Gemini <-> OpenAI Chat Completions pour utiliser les modèles OpenCode Zen
 # (Big Pickle par défaut, DeepSeek V4.1 Flash Free, Beam Free). Playwright n'est
@@ -65,6 +66,44 @@ jobs:
           else
             google-chrome-stable --version
           fi
+
+      - name: Lancer Chrome avec CDP pour le sous-agent navigateur
+        shell: bash
+        run: |
+          set -euo pipefail
+          CHROME_BIN=$(command -v google-chrome || command -v google-chrome-stable)
+          export CHROME_PROFILE="$HOME/.config/google-chrome"
+          rm -rf "$CHROME_PROFILE"
+          mkdir -p "$CHROME_PROFILE"
+          rm -f chrome.log chrome.pid
+          nohup "$CHROME_BIN" \
+            --headless=new \
+            --no-sandbox \
+            --disable-gpu \
+            --disable-dev-shm-usage \
+            --remote-debugging-port=0 \
+            --remote-allow-origins='*' \
+            --user-data-dir="$CHROME_PROFILE" \
+            about:blank > chrome.log 2>&1 &
+          echo $! > chrome.pid
+          READY=0
+          for _ in $(seq 1 60); do
+            if [ -s "$CHROME_PROFILE/DevToolsActivePort" ]; then
+              PORT=$(head -n1 "$CHROME_PROFILE/DevToolsActivePort")
+              if curl -fsS "http://127.0.0.1:$PORT/json/version" >/tmp/chrome_version.json 2>/dev/null; then
+                cat /tmp/chrome_version.json; echo
+                READY=1
+                break
+              fi
+            fi
+            sleep 1
+          done
+          if [ "$READY" -ne 1 ]; then
+            tail -50 chrome.log || true
+            echo "::error::Chrome CDP n'a pas démarré"
+            exit 1
+          fi
+          echo "✓ Chrome CDP prêt sur le port $(head -n1 "$CHROME_PROFILE/DevToolsActivePort")"
 
       - name: Installer Antigravity CLI
         shell: bash
@@ -266,6 +305,17 @@ jobs:
         run: |
           if [ -f proxy.pid ]; then
             PID=$(cat proxy.pid)
+            kill "$PID" 2>/dev/null || true
+            sleep 1
+            kill -9 "$PID" 2>/dev/null || true
+          fi
+
+      - name: Arrêter Chrome CDP
+        if: always()
+        shell: bash
+        run: |
+          if [ -f chrome.pid ]; then
+            PID=$(cat chrome.pid)
             kill "$PID" 2>/dev/null || true
             sleep 1
             kill -9 "$PID" 2>/dev/null || true
