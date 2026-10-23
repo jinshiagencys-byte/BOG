@@ -75,8 +75,15 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf _ironbee
-          git clone --depth 1 https://github.com/ironbee-ai/ironbee-express.git _ironbee
+          # Commit épinglé : le paquet npm n'est pas publié et le dépôt amont
+          # peut évoluer. On rebuild exactement la version validée en QA.
+          IRONBEE_COMMIT=5e547b7844f1e52a1e6fbd8bedb1b2a926b79a49
+          mkdir _ironbee
           cd _ironbee
+          git init -q
+          git remote add origin https://github.com/ironbee-ai/ironbee-express.git
+          git fetch -q --depth 1 origin "$IRONBEE_COMMIT"
+          git checkout -q FETCH_HEAD
           npm ci --no-audit --no-fund
           npm run build
           test -s dist/cli/main.js
