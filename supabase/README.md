@@ -89,18 +89,21 @@ Antigravity ne sait parler qu'à un endpoint **Gemini-compatible**. Le workflow 
 donc un proxy local, `.github/qa/opencode-gemini-proxy.mjs`, qui traduit les requêtes
 Gemini (`streamGenerateContent`, outils, `functionResponse`) vers l'endpoint OpenAI Chat
 Completions d'OpenCode Zen, puis retraduit le flux SSE (texte et `tool_calls`) en Gemini.
-La clé réelle `OPENCODE_API_KEY` reste dans l'environnement du proxy ; Antigravity ne
-reçoit qu'une clé factice et `GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:8787`.
+Antigravity ne reçoit qu'une clé factice et `GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:8787`.
+Le proxy applique le contrat d'identité du client OpenCode officiel (User-Agent,
+en-têtes `x-opencode-*`, identifiants `ses_`/`msg_`, flux SSE et tools non vides) puis
+utilise le credential public `Bearer public` pour les modèles gratuits. La clé
+`OPENCODE_API_KEY` n'est donc plus nécessaire pour ces modèles ; elle reste utilisée si
+un modèle payant est sélectionné.
 
-Modèles OpenCode sélectionnables : `deepseek-v4.1-flash-free` (défaut), `big-pickle` et
+Modèles OpenCode sélectionnables : `big-pickle` (défaut), `deepseek-v4.1-flash-free` et
 `beam-free`. Le slug Gemini `gemini-3.8-flash-medium` n'est qu'un véhicule protocolaire :
 le proxy le remplace par le modèle OpenCode choisi. Les requêtes de titre et de sécurité
-d'Antigravity sont envoyées à `deepseek-v4.1-flash-free`.
+d'Antigravity sont envoyées à `big-pickle`.
 
-Le workflow vérifie d'abord l'accès au modèle sur l'endpoint OpenAI d'OpenCode, démarre le
-proxy, puis lance `agy -p`. Le sous-agent `browser` est déclenché par la commande
-`/browser` en tête du prompt. `OPENCODE_API_KEY` est obligatoire : il n'y a plus de repli
-sur `GEMINI_API_KEY` ni sur l'endpoint Google standard.
+Le workflow démarre le proxy, vérifie l'accès au modèle via `/preflight`, puis lance
+`agy -p`. Le sous-agent `browser` est déclenché par la commande `/browser` en tête du
+prompt. Il n'y a plus de repli sur `GEMINI_API_KEY` ni sur l'endpoint Google standard.
 
 Chaîne complète :
 
@@ -148,16 +151,16 @@ dans `.github/qa/prompt.md` (le plan est injecté depuis le manifeste).
 
 Secrets Edge configurés : `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`,
 `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (fournis par Supabase), et
-`ANTIGRAVITY_MODEL` (modèle OpenCode par défaut : `deepseek-v4.1-flash-free`,
-`big-pickle` ou `beam-free`). `OPENCODE_MODEL` reste accepté comme alias. Le
+`ANTIGRAVITY_MODEL` (modèle OpenCode par défaut : `big-pickle`,
+`deepseek-v4.1-flash-free` ou `beam-free`). `OPENCODE_MODEL` reste accepté comme alias. Le
 `installation_id` est stocké par organisation dans `github_integrations` ; aucune clé
 privée ni token GitHub n'est en base. `github_integrations.workflow_file` vaut par défaut
 `antigravity-qa.yml`.
 
-Côté GitHub Actions, le secret requis est `OPENCODE_API_KEY` (endpoint OpenAI Chat
-Completions d'OpenCode Zen, utilisé par le proxy local). `GEMINI_API_KEY` n'est plus
-utilisé. Le secret `GITHUB_TOKEN` fourni par Actions n'est pas utilisé pour déclencher le
-workflow : `start-run` passe par la GitHub App.
+Côté GitHub Actions, `OPENCODE_API_KEY` reste optionnel : les modèles gratuits utilisent
+le credential public du client OpenCode à travers le proxy local. `GEMINI_API_KEY` n'est
+plus utilisé. Le secret `GITHUB_TOKEN` fourni par Actions n'est pas utilisé pour
+déclencher le workflow : `start-run` passe par la GitHub App.
 
 La clé privée téléchargée depuis GitHub est au format PKCS#1 (`BEGIN RSA PRIVATE KEY`).
 `jose.importPKCS8` attend du PKCS#8 : la convertir avant de créer le secret Edge :

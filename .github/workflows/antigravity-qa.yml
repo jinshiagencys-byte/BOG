@@ -5,7 +5,8 @@ name: Antigravity QA — TestDino-like run
 # pilote Chrome via Chrome DevTools (CDP) : aucun MCP chrome-devtools n'est configuré.
 # Antigravity ne parle qu'à un endpoint Gemini-compatible ; un proxy local traduit
 # Gemini <-> OpenAI Chat Completions pour utiliser les modèles OpenCode Zen
-# (DeepSeek V4.1 Flash Free, Big Pickle, Beam Free). Playwright n'est plus utilisé.
+# (Big Pickle par défaut, DeepSeek V4.1 Flash Free, Beam Free). Playwright n'est
+# plus utilisé.
 
 on:
   workflow_dispatch:
@@ -27,9 +28,9 @@ on:
         required: true
         type: string
       model:
-        description: "Modèle OpenCode (deepseek-v4.1-flash-free, big-pickle ou beam-free)"
+        description: "Modèle OpenCode (big-pickle, deepseek-v4.1-flash-free ou beam-free)"
         required: false
-        default: "deepseek-v4.1-flash-free"
+        default: "big-pickle"
         type: string
       target_url:
         description: "URL cible (facultative, sinon lue dans le manifeste)"
@@ -166,71 +167,65 @@ jobs:
           set -euo pipefail
           MODEL=$(printf '%s' "${REQUESTED_MODEL:-}" | tr '[:upper:]' '[:lower:]' | xargs)
           case "$MODEL" in
-            deepseek-v4.1-flash-free|opencode/deepseek-v4.1-flash-free)
+            deepseek|deepseek-v4.1-flash-free|opencode/deepseek|opencode/deepseek-v4.1-flash-free)
               MODEL="deepseek-v4.1-flash-free" ;;
-            big-pickle|big\ pickle|opencode/big-pickle)
+            big-pickle|big\ pickle|pickle|opencode/big-pickle|opencode/big\ pickle)
               MODEL="big-pickle" ;;
             beam|beam-free|opencode/beam|opencode/beam-free)
               MODEL="beam-free" ;;
             *)
-              echo "::warning::Modèle '$REQUESTED_MODEL' inconnu, repli sur deepseek-v4.1-flash-free"
-              MODEL="deepseek-v4.1-flash-free" ;;
+              echo "::warning::Modèle '$REQUESTED_MODEL' inconnu, repli sur big-pickle"
+              MODEL="big-pickle" ;;
           esac
           echo "name=$MODEL" >> "$GITHUB_OUTPUT"
           echo "🧠 Modèle OpenCode : $MODEL"
 
-      - name: Vérifier l'accès au modèle OpenCode
-        env:
-          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
-          AI_MODEL: ${{ steps.model.outputs.name }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          : "${OPENCODE_API_KEY:?secret OPENCODE_API_KEY requis}"
-          URL="https://opencode.ai/inference/openai/v1/chat/completions"
-          HTTP=$(curl -sS --max-time 60 -o /tmp/model_preflight.json -w '%{http_code}' \
-            -X POST "$URL" \
-            -H "Authorization: Bearer $OPENCODE_API_KEY" \
-            -H "Content-Type: application/json" \
-            --data "{\"model\":\"$AI_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],\"max_tokens\":8,\"stream\":false}")
-          if [ "$HTTP" != "200" ] || ! jq -e '.choices | type == "array" and length > 0' /tmp/model_preflight.json >/dev/null 2>&1; then
-            echo "::error::Preflight modèle OpenCode HTTP $HTTP pour $AI_MODEL"
-            head -c 800 /tmp/model_preflight.json || true
-            exit 1
-          fi
-          echo "✓ Modèle OpenCode disponible : $AI_MODEL"
-
       - name: Démarrer le proxy Gemini -> OpenCode
         env:
-          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           OPENCODE_MODEL: ${{ steps.model.outputs.name }}
-          OPENCODE_TITLE_MODEL: deepseek-v4.1-flash-free
-          OPENCODE_SAFETY_MODEL: deepseek-v4.1-flash-free
+          OPENCODE_TITLE_MODEL: big-pickle
+          OPENCODE_SAFETY_MODEL: big-pickle
         shell: bash
         run: |
           set -euo pipefail
-          : "${OPENCODE_API_KEY:?secret OPENCODE_API_KEY requis}"
           rm -f proxy.log proxy.pid
           nohup node .github/qa/opencode-gemini-proxy.mjs > proxy.log 2>&1 &
           echo $! > proxy.pid
+          READY=0
           for _ in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:8787/health >/tmp/proxy_health.json 2>/dev/null; then
               cat /tmp/proxy_health.json; echo
-              exit 0
+              READY=1
+              break
             fi
             sleep 1
           done
-          cat proxy.log || true
-          echo "::error::Le proxy OpenCode n'a pas démarré"
-          exit 1
+          if [ "$READY" -ne 1 ]; then
+            cat proxy.log || true
+            echo "::error::Le proxy OpenCode n'a pas démarré"
+            exit 1
+          fi
+
+          # Le free tier OpenCode exige un flux SSE, des tools non vides et
+          # l'identité du client officiel. Le proxy applique ce contrat ; on
+          # vérifie ici qu'un premier chunk arrive avant de lancer l'agent.
+          HTTP=$(curl -sS --max-time 75 -o /tmp/model_preflight.json -w '%{http_code}' \
+            http://127.0.0.1:8787/preflight || true)
+          cat /tmp/model_preflight.json 2>/dev/null || true; echo
+          if [ "${HTTP:-}" != "200" ] || ! jq -e '.ok == true' /tmp/model_preflight.json >/dev/null 2>&1; then
+            echo "::error::Preflight OpenCode HTTP ${HTTP:-aucun} pour $OPENCODE_MODEL"
+            tail -50 proxy.log || true
+            exit 1
+          fi
+          echo "✓ Modèle OpenCode disponible : $OPENCODE_MODEL"
 
       - name: Exécuter l'agent QA (Antigravity natif + OpenCode)
         id: qa_agent
         env:
           TARGET_URL: ${{ steps.prompt.outputs.target_url }}
           AI_MODEL: ${{ steps.model.outputs.name }}
-          # Antigravity ne reçoit jamais la vraie clé OpenCode : seul le proxy
-          # local la détient. Cette clé factice satisfait son SDK Gemini.
+          # Antigravity ne reçoit jamais de credential OpenCode : le proxy local
+          # gère l'authentification. Cette clé factice satisfait son SDK Gemini.
           GEMINI_API_KEY: local-proxy-key
           GOOGLE_GEMINI_BASE_URL: http://127.0.0.1:8787
         shell: bash

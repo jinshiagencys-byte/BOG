@@ -156,7 +156,7 @@ Deno.serve(async (req) => {
   );
   const model = normalizeOpenCodeModel(body.model)
     ?? configuredModel
-    ?? 'deepseek-v4.1-flash-free';
+    ?? 'big-pickle';
 
   try {
     const githubToken = await installationToken(Number(integration.installation_id));
