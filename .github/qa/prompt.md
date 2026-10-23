@@ -21,8 +21,10 @@ RÔLES
 - IMMÉDIATEMENT après chaque `invoke_subagent`, utilise `send_message` avec
   `Recipient` = le `conversationId` retourné pour lui demander de démarrer et de te
   répondre. Ne termine jamais ton tour ni la conversation tant que le sous-agent n'a pas
-  répondu : la session doit rester active pendant son démarrage. Pour un complément sur
-  le même lot, utilise `send_message` plutôt que de relancer un nouveau sous-agent.
+  répondu : la session doit rester active pendant son démarrage. Attends jusqu'à 20 minutes
+  sa réponse avant de déclarer le lot indisponible ; tu peux relancer une fois avec
+  `send_message`. Pour un complément sur le même lot, utilise `send_message` plutôt que de
+  relancer un nouveau sous-agent.
 
 OUTILS ET INTERDITS
 - Toutes les interactions web passent par le sous-agent `browser` (Chrome DevTools natif).
@@ -36,16 +38,24 @@ OUTILS ET INTERDITS
   rapport.
 
 MÉTHODE
-1. EXPLORATION : demande au sous-agent d'inspecter la page d'entrée, sa navigation, les
-   fonctionnalités réellement visibles et les routes atteignables. Note les zones
-   inaccessibles et les limites de l'environnement. N'infère pas qu'une fonctionnalité
-   existe uniquement depuis son nom.
+MODE RAPIDE (run de 10 cas ou moins) : si le plan contient 10 cas ou moins, ne fais pas
+d'exploration séparée. Commence directement par le premier lot ; une seule page d'entrée
+suffit. N'ajoute aucun cas découvert et limite chaque lot à 4 cas. Enchaîne les lots sans
+attendre. Si un HTTP 429 apparaît, ne relance pas de requêtes en boucle : marque les étapes
+dépendantes `blocked` avec la preuve 429 et continue les cas qui ne dépendent pas de l'API.
+
+1. EXPLORATION (runs de plus de 10 cas uniquement) : demande au sous-agent d'inspecter la
+   page d'entrée, sa navigation, les fonctionnalités réellement visibles et les routes
+   atteignables. Limite cette exploration à 5 minutes et 3 pages maximum ; ne recharge pas
+   les pages et n'enchaîne pas les appels API. Note les zones inaccessibles et les limites
+   de l'environnement. N'infère pas qu'une fonctionnalité existe uniquement depuis son nom.
 2. PLAN : adapte les cas prédéfinis à ce site. Si un cas ne s'applique pas, marque-le
    `skipped` avec une raison : ne l'omets jamais du rapport. Ajoute les scénarios importants
    découverts, mais donne la priorité aux 41 cas fournis : exécute-les d'abord, puis les
-   découvertes critiques. Regroupe les scénarios qui testent le même comportement pour
-   éviter les répétitions. Une fois le plan arrêté, il est figé : ne modifie plus les étapes
-   ni leurs attendus pour les faire coller à ce que tu observes.
+   découvertes critiques. Pour un run de 10 cas ou moins, n'ajoute aucun cas découvert.
+   Regroupe les scénarios qui testent le même comportement pour éviter les répétitions. Une
+   fois le plan arrêté, il est figé : ne modifie plus les étapes ni leurs attendus pour les
+   faire coller à ce que tu observes.
 3. EXÉCUTION : pour chaque lot, demande au sous-agent d'exécuter les étapes dans l'ordre,
    d'observer le résultat après chaque action et de retourner immédiatement les preuves
    textuelles : URL, code HTTP, messages console, requêtes/réponses réseau et extraits DOM.
