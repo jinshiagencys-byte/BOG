@@ -25,6 +25,14 @@ type RawCase = {
   discovered?: boolean | null;
   severity?: string | null;
   status?: string | null;
+  note?: string | null;
+  duration_ms?: number | string | null;
+  failure_message?: string | null;
+  stack_trace?: string | null;
+  retry_count?: number | string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  artifacts?: unknown;
   steps?: RawStep[] | null;
 };
 
@@ -106,6 +114,14 @@ function normalizeCase(raw: RawCase) {
     category,
     suite,
     description: asText(raw.description) ?? '',
+    note: asText(raw.note),
+    duration_ms: asInteger(raw.duration_ms),
+    failure_message: asText(raw.failure_message),
+    stack_trace: asText(raw.stack_trace),
+    retry_count: asInteger(raw.retry_count),
+    started_at: asText(raw.started_at),
+    finished_at: asText(raw.finished_at),
+    artifacts: Array.isArray(raw.artifacts) ? raw.artifacts : [],
     steps,
   };
 }

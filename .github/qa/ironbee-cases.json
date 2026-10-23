@@ -2,6 +2,9 @@
   "TC-ECOM-001": {
     "url": "https://odjafrik.com",
     "goal": "Type \"Agonlin\" into the header search field labelled \"Rechercher des produits, fournisseurs...\", then press Enter exactly once. Stop immediately after the results page shows the products. Do not click the search button or any other control.",
+    "label": "des produits pour la recherche Agonlin",
+    "probeUrl": "https://odjafrik.com/products?search=Agonlin",
+    "perf": { "maxContentMs": 5000, "maxWaitMs": 15000 },
     "expect": {
       "url": "/products\\?search=Agonlin",
       "text": ["[1-9]\\d* produits? trouvés", "Les merveilles d.*Agonlin"],
@@ -12,6 +15,9 @@
   "TC-ECOM-002": {
     "url": "https://odjafrik.com/products?category=426a089f-f00c-41f2-8a34-a74a82eafbbd",
     "goal": "Confirm the category page lists at least one product. Stop immediately after confirming; do not click anything.",
+    "label": "au moins un produit dans la catégorie",
+    "probeUrl": "https://odjafrik.com/products?category=426a089f-f00c-41f2-8a34-a74a82eafbbd",
+    "perf": { "maxContentMs": 5000, "maxWaitMs": 15000 },
     "expect": {
       "url": "/products\\?category=426a089f",
       "text": ["FCFA", "Tissus|Indigo|Agonlin|Hémorro|Moto"],
@@ -22,6 +28,9 @@
   "TC-ECOM-003": {
     "url": "https://odjafrik.com/product/35634176-4386-440f-9708-af9bfd1caac7",
     "goal": "Wait until the product page shows the product name, price and stock status. Do not scroll and do not click any link. Stop as soon as the information is visible.",
+    "label": "le nom, le prix et le stock du produit",
+    "probeUrl": "https://odjafrik.com/product/35634176-4386-440f-9708-af9bfd1caac7",
+    "perf": { "maxContentMs": 5000, "maxWaitMs": 15000 },
     "expect": {
       "url": "/product/35634176-4386-440f-9708-af9bfd1caac7",
       "text": ["Les merveilles d.*Agonlin", "15,000 FCFA", "En stock - \\d+ unités"],
@@ -31,6 +40,10 @@
   "TC-ECOM-004": {
     "url": "https://odjafrik.com/product/35634176-4386-440f-9708-af9bfd1caac7",
     "goal": "On this product page, click the button labelled \"Ajouter\" exactly once. Then navigate to https://odjafrik.com/cart and stop when the cart shows \"Les merveilles d’Agonlin Long grain\". Do not use the search field, do not log in and do not proceed to checkout.",
+    "label": "le produit ajouté au panier",
+    "probeUrl": "https://odjafrik.com/product/35634176-4386-440f-9708-af9bfd1caac7",
+    "probeText": ["Les merveilles d.*Agonlin", "15,000 FCFA", "En stock - \\d+ unités"],
+    "perf": { "maxContentMs": 5000, "maxWaitMs": 15000 },
     "expect": {
       "url": "/cart",
       "text": ["Les merveilles d.*Agonlin", "15,000 FCFA", "1 article"],

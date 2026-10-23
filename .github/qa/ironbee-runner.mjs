@@ -16,6 +16,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { performance } from 'node:perf_hooks'
+import { openProbe, probeUrl } from './page-probe.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
@@ -127,6 +128,7 @@ function defaultGoal(c) {
   return {
     url: TARGET_URL,
     goal: `On ${TARGET_URL}, verify this test case: "${c.title}". ${c.steps.map((s) => `${s.n}. ${s.action} (attendu: ${s.expected})`).join(' ')} Stop when the page clearly shows the result. Do not perform unrelated actions.`,
+    label: c.title,
     expect: { url: '', text: [], console: 'warn' },
   }
 }
@@ -239,12 +241,58 @@ function textOf(json) {
   return (json?.journey?.pages ?? []).map((p) => p.excerpt ?? '').join('\n')
 }
 
-function verify(c, goal, run) {
+function formatMs(ms) {
+  if (ms == null || !Number.isFinite(ms)) return 'non mesuré'
+  return `${(ms / 1000).toFixed(1).replace('.', ',')} s`
+}
+
+function cleanText(value, max = 700) {
+  return String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, max)
+}
+
+function productCountOf(text) {
+  const match = /(\d+)\s+produits?\s+trouvés?/i.exec(String(text ?? ''))
+  return match ? Number(match[1]) : null
+}
+
+function articleCountOf(text) {
+  const match = /(\d+)\s+articles?/i.exec(String(text ?? ''))
+  return match ? Number(match[1]) : null
+}
+
+function shortConsole(value) {
+  const raw = String(value ?? '')
+  const firstLine = cleanText(raw.split('\n')[0], 220)
+  const file = /https:\/\/[^\s)]+/.exec(raw)?.[0]
+  if (!file) return firstLine
+  return `${firstLine} (${file.replace(/^https?:\/\/[^/]+\//, '')})`
+}
+
+function pageExcerpt(text) {
+  const normalized = cleanText(text, 12000)
+  if (!normalized) return 'page vide'
+  const anchor = normalized.search(/produits?\s+trouvés?|aucun produit|FCFA|En stock|Ajouter|Mon Panier/i)
+  if (anchor < 0) return normalized.slice(0, 520)
+  const start = Math.max(0, anchor - 100)
+  return normalized.slice(start, start + 620)
+}
+
+function isSeriousConsole(value) {
+  return /NG\d{4}|uncaught|typeerror|referenceerror|ERROR\s+M:|error:/i.test(String(value ?? ''))
+}
+
+function uniqueStrings(values) {
+  return [...new Set(values.filter(Boolean).map((value) => String(value).trim()).filter(Boolean))]
+}
+
+async function verify(c, goal, run, probeBrowser) {
   const json = run.json
   const findings = Array.isArray(json?.analysis?.findings) ? json.analysis.findings : []
   const pages = Array.isArray(json?.journey?.pages) ? json.journey.pages : []
   const text = textOf(json)
   const finalUrl = json?.finalUrl ?? pages.at(-1)?.url ?? ''
+  const maxContentMs = goal.perf?.maxContentMs ?? 5000
+  const maxWaitMs = goal.perf?.maxWaitMs ?? 15000
   const urlOk = !goal.expect?.url || new RegExp(goal.expect.url, 'i').test(finalUrl) || pages.some((p) => new RegExp(goal.expect.url, 'i').test(p.url ?? ''))
   const textChecks = (goal.expect?.text ?? []).map((pattern) => ({
     pattern,
@@ -255,35 +303,97 @@ function verify(c, goal, run) {
     pattern,
     matched: new RegExp(pattern, 'i').test(text),
   }))
-  const hasNegativeEvidence = negativeChecks.some((x) => x.matched)
-  const consoleErrors = findings.filter((f) => f.source === 'console' && /error|uncaught|NG\d{4}/i.test(`${f.title ?? ''} ${f.detail ?? ''}`))
+  const ironbeeNegative = negativeChecks.find((x) => x.matched)?.pattern ?? null
+  const ironbeeFindings = findings.filter((f) => f.source === 'console' && isSeriousConsole(`${f.title ?? ''} ${f.detail ?? ''}`))
   const seriousFindings = findings.filter((f) => ['major', 'critical'].includes(f.severity))
   const transient = transientFindings(json)
   const consolePolicy = goal.expect?.console ?? 'warn'
 
+  const probeWanted = Boolean(goal.probeUrl) || (goal.expect?.text?.length ?? 0) > 0
+  const probe = probeBrowser && probeWanted
+    ? await probeUrl(probeBrowser, {
+        url: goal.probeUrl || finalUrl,
+        text: goal.probeText || goal.expect?.text || [],
+        failIfText: goal.expect?.failIfText || [],
+        maxContentMs,
+        maxWaitMs,
+      })
+    : { available: false, reason: 'aucune cible de sonde définie' }
+
+  const probeTextChecks = probe.available
+    ? (goal.probeText || goal.expect?.text || []).map((pattern) => ({
+        pattern,
+        ok: new RegExp(pattern, 'i').test(probe.text ?? ''),
+      }))
+    : []
+  const probeTextOk = probe.available ? probe.matched : null
+  const probeReloadOk = probe.available ? probe.reloadMatched : null
+  const contentOk = probe.available
+    ? probe.matched && (!goal.probeText || textOk)
+    : textOk
+  const probeHttpStatus = probe.httpStatus ?? null
+  const probeNavFailed = probe.available && (probe.navError || probeHttpStatus === 429 || probeHttpStatus >= 500)
+  const probeContentMs = probe.contentMs ?? null
+  const probeReloadContentMs = probe.reloadContentMs ?? null
+  const slowContent = probe.available && probeContentMs != null && probeContentMs > maxContentMs
+  const slowReload = probe.available && probeReloadContentMs != null && probeReloadContentMs > maxContentMs
+  const missingTexts = (probe.available ? probeTextChecks : textChecks)
+    .filter((check) => !check.ok)
+    .map((check) => check.pattern)
+  const finalMissingTexts = textChecks.filter((check) => !check.ok).map((check) => check.pattern)
+  const productCount = probe.available ? productCountOf(probe.text) : productCountOf(text)
+  const ironbeeProductCount = productCountOf(text)
+  const articleCount = articleCountOf(text) ?? articleCountOf(probe.text)
+  const negative = probe.available ? probe.negative : ironbeeNegative
+  const consoleErrors = uniqueStrings([
+    ...(probe.available ? probe.consoleErrors : []),
+    ...ironbeeFindings.map((finding) => finding.title),
+  ]).filter(isSeriousConsole)
+  const excerpt = pageExcerpt(probe.text || text)
+
   let status = 'blocked'
   let reason = 'no-evidence'
-  if (run.timedOut) {
+
+  if (!probe.available && run.timedOut) {
     status = 'blocked'
     reason = 'timeout'
-  } else if (!json) {
+  } else if (!probe.available && !json) {
     status = 'blocked'
     reason = run.parseError ? `invalid-json: ${run.parseError}` : 'no-json'
-  } else if (urlOk && hasNegativeEvidence) {
-    // The browser reached the expected page and the page explicitly contradicts
-    // the expectation (for example \"Aucun produit trouvé\"). A network warning
-    // or a blocked agent verdict must not hide a real product failure.
+  } else if (probe.available && probeNavFailed) {
+    status = 'blocked'
+    reason = 'network'
+  } else if (probe.available && negative) {
+    // The requested page was reached and explicitly says there is no product.
+    // A model loop or a minor console warning must not hide that fact.
     status = 'failed'
     reason = 'negative-evidence'
-  } else if (urlOk && textOk) {
+  } else if (probe.available && !probe.matched) {
+    status = 'failed'
+    reason = 'content-missing'
+  } else if (probe.available && !probe.reloadMatched) {
+    status = 'failed'
+    reason = 'reload-missing'
+  } else if (slowContent || slowReload) {
+    status = 'failed'
+    reason = 'slow-content'
+  } else if (!urlOk) {
+    if (json?.status === 'done') {
+      status = 'failed'
+      reason = 'expectation-mismatch'
+    } else {
+      status = 'blocked'
+      reason = 'inconclusive'
+    }
+  } else if (contentOk) {
     if (consolePolicy === 'fail' && consoleErrors.length) {
       status = 'failed'
       reason = 'console-error'
     } else {
       status = 'passed'
-      reason = json.status === 'done' ? 'goal-and-evidence' : 'evidence-overrides-ironbee'
+      reason = json?.status === 'done' ? 'goal-and-evidence' : 'evidence-overrides-ironbee'
     }
-  } else if (json.status === 'done') {
+  } else if (json?.status === 'done') {
     status = 'failed'
     reason = 'expectation-mismatch'
   } else if (transient.length) {
@@ -299,21 +409,61 @@ function verify(c, goal, run) {
     reason = 'serious-finding'
   }
 
-  const noteParts = []
-  if (json?.analysis?.summary) noteParts.push(json.analysis.summary)
-  if (json && json.status !== 'done') noteParts.push(`IronBee: ${json.status ?? 'unknown'}${json.reason ? `/${json.reason}` : ''}`)
-  if (!urlOk) noteParts.push(`URL attendue non atteinte (${finalUrl || 'aucune'})`)
-  for (const check of textChecks) {
-    if (!check.ok) noteParts.push(`Texte attendu absent: ${check.pattern}`)
+  const label = goal.label || 'le comportement attendu'
+  let actual = ''
+  if (status === 'passed') {
+    if (!probe.available) {
+      const observedLabel = productCount != null
+        ? `${productCount} produit${productCount > 1 ? 's' : ''} trouvé${productCount > 1 ? 's' : ''}`
+        : (goal.expect?.text?.length ? 'les textes attendus sont présents' : 'le parcours est terminé')
+      actual = `Vérifié par IronBee : ${label}. ${observedLabel}. Mesure de performance indisponible pour ce cas.`
+    } else {
+      let observedLabel = 'des produits avec prix'
+      if (articleCount != null) {
+        observedLabel = `${articleCount} article${articleCount > 1 ? 's' : ''} dans le panier`
+      } else if (productCount != null) {
+        observedLabel = `${productCount} produit${productCount > 1 ? 's' : ''} trouvé${productCount > 1 ? 's' : ''}`
+      } else if (goal.probeText || /product\//i.test(goal.probeUrl ?? '')) {
+        observedLabel = 'la fiche produit affiche le nom, le prix et le stock'
+      }
+      actual = `Attendu observé : ${label}. ${observedLabel}, contenu affiché en ${formatMs(probeContentMs)} (seuil ${formatMs(maxContentMs)})`
+      if (probeReloadContentMs != null) actual += `, puis ${formatMs(probeReloadContentMs)} après rechargement`
+      actual += '.'
+      if (consoleErrors.length) actual += ` Avertissement console : « ${shortConsole(consoleErrors[0])} ».`
+    }
+  } else if (reason === 'slow-content') {
+    const which = slowContent ? 'au premier affichage' : 'après rechargement'
+    const ms = slowContent ? probeContentMs : probeReloadContentMs
+    const seen = productCount != null
+      ? `${productCount} produit${productCount > 1 ? 's' : ''} visible${productCount > 1 ? 's' : ''}`
+      : 'le contenu attendu visible'
+    actual = `Le contenu attendu (${label}) est bien là (${seen}), mais il s'affiche ${which} après ${formatMs(ms)}, au-delà du seuil de ${formatMs(maxContentMs)}. C'est trop lent pour un client. Extrait : « ${excerpt} ».`
+  } else if (reason === 'negative-evidence') {
+    const count = productCount != null ? `${productCount} produit${productCount > 1 ? 's' : ''}` : 'aucun produit'
+    const instability = ironbeeProductCount != null && ironbeeProductCount !== productCount
+      ? ` L'affichage est instable : ${count} maintenant, ${ironbeeProductCount} produit${ironbeeProductCount > 1 ? 's' : ''} pendant le parcours IronBee.`
+      : ''
+    actual = `La page affiche ${count} / « ${negative} » au lieu de ${label}.${instability} Extrait : « ${excerpt} ».`
+  } else if (reason === 'content-missing') {
+    actual = `Le contenu attendu (${label}) n'apparaît pas après ${formatMs(maxWaitMs)}. Textes absents : ${missingTexts.map((p) => `« ${p} »`).join(', ')}. La page affiche : « ${excerpt} ».`
+  } else if (reason === 'reload-missing') {
+    actual = `Le contenu était visible au premier chargement, mais il n'apparaît plus après rechargement (${formatMs(probeReloadContentMs ?? maxWaitMs)}). Extrait : « ${excerpt} ».`
+  } else if (reason === 'console-error') {
+    actual = `Le contenu attendu (${label}) est affiché en ${formatMs(probeContentMs)}, mais la console contient une erreur : « ${shortConsole(consoleErrors[0])} ».`
+  } else if (reason === 'network') {
+    const detail = probe.navError || `HTTP ${probeHttpStatus ?? 'inconnu'}`
+    actual = `Impossible de charger ${goal.probeUrl || finalUrl} : ${detail}. ${transient.length ? `IronBee a aussi vu : ${transient.map((f) => f.title).join(' | ').slice(0, 300)}.` : ''}`
+  } else if (reason === 'expectation-mismatch') {
+    actual = `Le parcours n'a pas produit le résultat attendu (${label}). URL finale : ${finalUrl || 'aucune'}. Textes absents du parcours : ${finalMissingTexts.map((p) => `« ${p} »`).join(', ') || 'aucun'}. Extrait : « ${excerpt} ».`
+  } else if (reason === 'timeout') {
+    actual = `IronBee n'a pas terminé dans le délai imparti. Dernière URL : ${finalUrl || 'aucune'}.`
+  } else if (reason === 'no-json' || reason.startsWith('invalid-json')) {
+    actual = `IronBee n'a pas renvoyé de résultat exploitable${run.parseError ? ` : ${cleanText(run.parseError, 240)}` : ''}.`
+  } else if (reason === 'serious-finding') {
+    actual = `Le contenu est visible, mais IronBee a relevé un problème sérieux : ${seriousFindings.map((f) => f.title).join(' | ').slice(0, 400)}.`
+  } else {
+    actual = `Preuve insuffisante : ${label}. URL finale : ${finalUrl || 'aucune'}. Extrait : « ${excerpt} ».`
   }
-  for (const check of negativeChecks) {
-    if (check.matched) noteParts.push(`Preuve négative observée: ${check.pattern}`)
-  }
-  if (transient.length) noteParts.push(`Réseau: ${transient.map((f) => f.title).join(' | ').slice(0, 500)}`)
-  if (consoleErrors.length) {
-    noteParts.push(`Console${consolePolicy === 'fail' ? '' : ' (avertissement)'}: ${consoleErrors.map((f) => f.title).join(' | ').slice(0, 500)}`)
-  }
-  if (run.parseError) noteParts.push(`Sortie IronBee illisible: ${run.parseError}`)
 
   return {
     status,
@@ -321,15 +471,30 @@ function verify(c, goal, run) {
     urlOk,
     textOk,
     textChecks,
+    probeTextChecks,
+    probeTextOk,
+    probeReloadOk,
     negativeChecks,
-    hasNegativeEvidence,
+    hasNegativeEvidence: Boolean(negative),
     consoleErrors,
     seriousFindings,
     transient,
     findings,
     pages,
     finalUrl,
-    note: noteParts.join(' · ') || (status === 'passed' ? 'Preuves conformes' : 'Preuve insuffisante'),
+    probe,
+    productCount,
+    ironbeeProductCount,
+    articleCount,
+    contentMs: probeContentMs,
+    reloadContentMs: probeReloadContentMs,
+    maxContentMs,
+    slowContent,
+    slowReload,
+    missingTexts,
+    excerpt,
+    actual,
+    note: actual,
   }
 }
 
@@ -348,7 +513,27 @@ function compactEvidence(c, goal, run, verdict) {
     url_ok: verdict.urlOk,
     text_ok: verdict.textOk,
     text_checks: verdict.textChecks,
+    probe_text_checks: verdict.probeTextChecks,
     negative_checks: verdict.negativeChecks,
+    actual: verdict.actual,
+    probe: verdict.probe ? {
+      available: verdict.probe.available,
+      url: verdict.probe.url ?? null,
+      http_status: verdict.probe.httpStatus ?? null,
+      content_ms: verdict.probe.contentMs ?? null,
+      reload_content_ms: verdict.probe.reloadContentMs ?? null,
+      duration_ms: verdict.probe.durationMs ?? null,
+      threshold_ms: verdict.maxContentMs,
+      matched: verdict.probe.matched ?? null,
+      reload_matched: verdict.probe.reloadMatched ?? null,
+      negative: verdict.probe.negative ?? null,
+      product_count: verdict.productCount,
+      ironbee_product_count: verdict.ironbeeProductCount,
+      article_count: verdict.articleCount,
+      excerpt: verdict.excerpt,
+      console_errors: verdict.probe.consoleErrors ?? [],
+      nav_error: verdict.probe.navError ?? null,
+    } : null,
     network_findings: verdict.transient?.map((f) => ({ title: f.title, detail: f.detail })) ?? [],
     cached: run.cached === true,
     findings: verdict.findings.slice(0, 8).map((f) => ({
@@ -376,25 +561,48 @@ function compactEvidence(c, goal, run, verdict) {
 function stepResults(c, status, verdict, run, goal) {
   const steps = c.steps.length ? c.steps : [{ n: 1, action: c.title, expected: 'Comportement attendu observé' }]
   const evidence = compactEvidence(c, goal, run, verdict)
+  const probe = verdict.probe?.available ? verdict.probe : null
+  const openActual = probe
+    ? `Page ouverte : ${probe.url || 'URL inconnue'}${probe.httpStatus != null ? ` (HTTP ${probe.httpStatus})` : ''}. ${verdict.contentMs != null ? `Contenu affiché en ${formatMs(verdict.contentMs)}.` : 'Le contenu attendu ne s’est pas affiché dans le délai.'}`
+    : `Page ouverte par IronBee. URL finale : ${verdict.finalUrl || 'inconnue'}.`
+  const reloadActual = verdict.reloadContentMs != null
+    ? `Après rechargement, le contenu attendu est toujours affiché en ${formatMs(verdict.reloadContentMs)} (seuil ${formatMs(verdict.maxContentMs)}).`
+    : 'Contrôle final effectué sur la page déjà chargée.'
+
   return steps.map((s, i) => {
     let stepStatus = 'passed'
-    if (status === 'passed') stepStatus = 'passed'
-    else if (status === 'failed') stepStatus = i === steps.length - 1 ? 'failed' : 'passed'
-    else if (status === 'blocked') stepStatus = i === 0 ? 'blocked' : 'skipped'
-    else stepStatus = 'skipped'
-    const actual = status === 'passed'
-      ? (verdict.note || 'Vérifié dans le navigateur')
-      : status === 'failed'
-        ? (i === steps.length - 1 ? verdict.note : 'Étape exécutée avant l’échec')
-        : status === 'blocked'
-          ? (i === 0 ? verdict.note : 'Non exécutée')
-          : 'Non exécutée'
+    let actual = ''
+    if (status === 'passed') {
+      actual = i === 0 ? openActual : i === 1 ? verdict.actual : reloadActual
+    } else if (status === 'failed') {
+      if (i === 0) {
+        stepStatus = 'passed'
+        actual = openActual
+      } else if (i === 1) {
+        stepStatus = 'failed'
+        actual = verdict.actual
+      } else {
+        stepStatus = 'skipped'
+        actual = 'Non exécutée : l’échec a été constaté avant cette étape.'
+      }
+    } else if (status === 'blocked') {
+      if (i === 0) {
+        stepStatus = 'blocked'
+        actual = verdict.actual
+      } else {
+        stepStatus = 'skipped'
+        actual = 'Non exécutée : le parcours n’a pas pu aboutir.'
+      }
+    } else {
+      stepStatus = 'skipped'
+      actual = 'Non exécutée.'
+    }
     return {
       n: s.n,
       code: `${c.code}-${s.n}`,
       action: s.action,
       expected: s.expected,
-      actual: String(actual).slice(0, 1500),
+      actual: String(actual).slice(0, 2000),
       status: stepStatus,
       evidence,
     }
@@ -403,30 +611,41 @@ function stepResults(c, status, verdict, run, goal) {
 
 const startedAt = new Date()
 const results = []
-for (const [index, c] of cases.entries()) {
-  const goal = goals[c.code] ?? defaultGoal(c)
-  console.log(`\n▶ ${c.code} — ${c.title}`)
-  if (index > 0 && CASE_DELAY_MS > 0 && !REUSE_CACHE) {
-    console.log(`  … pause ${Math.round(CASE_DELAY_MS / 1000)} s entre les cas`)
-    await sleep(CASE_DELAY_MS)
+const probeBrowser = await openProbe(IRONBEE_DIR)
+if (probeBrowser.available) {
+  console.log(`\n🔎 Sonde de page prête (${probeBrowser.executablePath})`)
+} else {
+  console.log(`\n⚠ Sonde de page indisponible : ${probeBrowser.reason}`)
+}
+
+try {
+  for (const [index, c] of cases.entries()) {
+    const goal = goals[c.code] ?? defaultGoal(c)
+    console.log(`\n▶ ${c.code} — ${c.title}`)
+    if (index > 0 && CASE_DELAY_MS > 0 && !REUSE_CACHE) {
+      console.log(`  … pause ${Math.round(CASE_DELAY_MS / 1000)} s entre les cas`)
+      await sleep(CASE_DELAY_MS)
+    }
+    const run = await runIronBee(c)
+    const verdict = await verify(c, goal, run, probeBrowser)
+    console.log(`  ${verdict.status.toUpperCase()} (${verdict.reason}) · ${run.durationMs} ms · ${run.json?.actions ?? '?'} actions`)
+    console.log(`  ${verdict.actual.slice(0, 700)}`)
+    results.push({
+      code: c.code,
+      title: c.title,
+      category: c.category,
+      suite: c.suite,
+      description: c.description,
+      discovered: c.discovered,
+      severity: c.severity,
+      status: verdict.status,
+      note: verdict.note.slice(0, 4000),
+      duration_ms: run.durationMs,
+      steps: stepResults(c, verdict.status, verdict, run, goal),
+    })
   }
-  const run = await runIronBee(c)
-  const verdict = verify(c, goal, run)
-  console.log(`  ${verdict.status.toUpperCase()} (${verdict.reason}) · ${run.durationMs} ms · ${run.json?.actions ?? '?'} actions`)
-  console.log(`  ${verdict.note.slice(0, 500)}`)
-  results.push({
-    code: c.code,
-    title: c.title,
-    category: c.category,
-    suite: c.suite,
-    description: c.description,
-    discovered: c.discovered,
-    severity: c.severity,
-    status: verdict.status,
-    note: verdict.note.slice(0, 4000),
-    duration_ms: run.durationMs,
-    steps: stepResults(c, verdict.status, verdict, run, goal),
-  })
+} finally {
+  if (probeBrowser.available) await probeBrowser.browser.close().catch(() => {})
 }
 
 const counts = { passed: 0, failed: 0, blocked: 0, skipped: 0 }
