@@ -77,7 +77,32 @@ node supabase/scripts/generate-case-templates.mjs
 Le script lit `app/src/data/casePacks.js` et réécrit
 `20261022120100_v2_02_case_templates.sql`. Ne pas éditer ce fichier à la main.
 
-## Exécution des runs — agent Antigravity
+## Exécution des runs — IronBee (principal)
+
+Le chemin par défaut est **IronBee Express** (`@ironbee-ai/express`) avec **Jev** via
+OpenRouter. `start-run` déclenche `.github/workflows/ironbee-qa.yml` ; le workflow clone et
+compile IronBee, installe Google Chrome, récupère le manifeste puis exécute
+`.github/qa/ironbee-runner.mjs`.
+
+Le runner ne fait pas confiance au verdict de l'agent : il possède les assertions. Un cas
+n'est `passed` que si l'URL finale, les textes attendus et la politique console sont
+conformes. Une preuve de page peut donc valider un cas même si IronBee termine `blocked`
+(par exemple quand Jev boucle sur « la page liste-t-elle des produits ? »). Inversement,
+`Aucun produit trouvé` ou `0 produits trouvés` produit un `failed`, pas un `blocked`.
+
+- Modèle : `openrouter/jev-latest` via `https://openrouter.ai/api/v1/systemone`.
+- `OPENROUTER_API_KEY` est lue depuis le secret GitHub `OPENROUTER_API_KEY` s'il existe.
+  Sinon, le workflow appelle `qa-credentials` avec `x-run-token` ; la clé reste côté
+  Supabase et n'atteint jamais le navigateur.
+- Les cas cartographiés sont dans `.github/qa/ironbee-cases.json`. Les cas non cartographiés
+  utilisent un objectif générique construit depuis leur titre et leurs étapes.
+- Les erreurs réseau (`429`, `ECONNRESET`, timeouts) donnent `blocked` avec un retry
+  borné ; elles ne sont pas maquillées en échec produit.
+
+Antigravity reste disponible en fallback explicite (`executor: "antigravity"` dans
+`start-run`) et conserve le workflow `.github/workflows/antigravity-qa.yml`.
+
+## Exécution des runs — agent Antigravity (fallback)
 
 Le moteur d'exécution n'est **pas Playwright**. Les tests sont exécutés par
 **Antigravity CLI** (`agy`) et son sous-agent navigateur natif `browser`, qui pilote Chrome
@@ -117,7 +142,8 @@ Chaîne complète :
 2. `start-run` appelle `create_run_manifest` en `service_role` : le manifeste contient les
    cas, leurs étapes numérotées (`n`), le plan, l'URL cible et un jeton éphémère.
 3. `start-run` obtient un token d'installation GitHub App et déclenche le workflow
-   `antigravity-qa.yml` avec `run_id`, `manifest_url` et `run_token`.
+   `ironbee-qa.yml` (ou `antigravity-qa.yml` si `executor: "antigravity"`) avec `run_id`,
+   `manifest_url` et `run_token`.
 4. Le workflow récupère le manifeste, construit la section « PLAN DE TEST » du prompt à
    partir des cas, puis lance l'agent.
 5. L'agent écrit `qa_result.json` : par cas, `status`, `severity`, `steps[].n`,
@@ -143,28 +169,37 @@ Fichiers déployés avec `supabase functions deploy` :
 
 - `supabase/functions/start-run/index.ts` : vérifie le JWT utilisateur, charge
   `github_integrations`, appelle `create_run_manifest` avec le `service_role`, obtient un
-  token d'installation GitHub App, déclenche `antigravity-qa.yml`, puis ne renvoie que
-  `runId` au navigateur. Le jeton de run n'est jamais renvoyé au client.
+  token d'installation GitHub App, déclenche `ironbee-qa.yml` par défaut, puis ne renvoie
+  que `runId` au navigateur. Le jeton de run n'est jamais renvoyé au client.
 - `supabase/functions/report-run/index.ts` : reçoit `x-run-token`, normalise
-  `qa_result.json` (`test_cases` → `cases`, `id` → `code`, `n` conservé) et appelle
-  `report_run` avec le `service_role`.
+  `qa_result.json` (`test_cases` → `cases`, `id` → `code`, `n` conservé), respecte
+  l'`executor` déclaré (`ironbee` ou `antigravity`) et appelle `report_run` avec le
+  `service_role`.
+- `supabase/functions/qa-credentials/index.ts` : remet la clé OpenRouter au workflow QA
+  porteur d'un `x-run-token` valide, non expiré et lié au bon run. Jamais appelée par le
+  navigateur.
 - `supabase/functions/run-manifest/index.ts` : sert le manifeste figé au workflow,
   authentifié par `x-run-token`.
 
-Le workflow clone est `.github/workflows/antigravity-qa.yml` ; le prompt de l'agent est
-dans `.github/qa/prompt.md` (le plan est injecté depuis le manifeste).
+Le workflow principal est `.github/workflows/ironbee-qa.yml` avec le runner
+`.github/qa/ironbee-runner.mjs` et les objectifs `.github/qa/ironbee-cases.json`.
+Le fallback Antigravity utilise `.github/workflows/antigravity-qa.yml` et
+`.github/qa/prompt.md` (le plan est injecté depuis le manifeste).
 
 Secrets Edge configurés : `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`,
-`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (fournis par Supabase), et
-`ANTIGRAVITY_MODEL` (modèle OpenCode par défaut : `big-pickle`,
-`deepseek-v4.1-flash-free` ou `beam-free`). `OPENCODE_MODEL` reste accepté comme alias. Le
-`installation_id` est stocké par organisation dans `github_integrations` ; aucune clé
-privée ni token GitHub n'est en base. `github_integrations.workflow_file` vaut par défaut
-`antigravity-qa.yml`.
+`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (fournis par Supabase), `OPENROUTER_API_KEY`
+(pour IronBee), et `ANTIGRAVITY_MODEL` (modèle OpenCode par défaut : `big-pickle`,
+`deepseek-v4.1-flash-free` ou `beam-free`) pour le fallback. `OPENCODE_MODEL` reste
+accepté comme alias. Le `installation_id` est stocké par organisation dans
+`github_integrations` ; aucune clé privée ni token GitHub n'est en base.
+`github_integrations.workflow_file` reste `antigravity-qa.yml` pour le fallback ;
+`start-run` force `ironbee-qa.yml` par défaut.
 
-Côté GitHub Actions, `OPENCODE_API_KEY` est optionnelle : sans elle, les modèles gratuits
-utilisent le credential public du client OpenCode à travers le proxy local ; avec elle,
-le quota est celui du compte associé. `GEMINI_API_KEY` n'est plus utilisé. Le secret
+Côté GitHub Actions, `OPENCODE_API_KEY` est optionnelle pour le fallback Antigravity :
+sans elle, les modèles gratuits utilisent le credential public du client OpenCode à travers
+le proxy local ; avec elle, le quota est celui du compte associé. Pour IronBee, le secret
+GitHub `OPENROUTER_API_KEY` est optionnel : s'il est absent, le workflow le récupère via
+`qa-credentials` et `x-run-token`. `GEMINI_API_KEY` n'est plus utilisé. Le secret
 `GITHUB_TOKEN` fourni par Actions n'est pas utilisé pour déclencher le workflow :
 `start-run` passe par la GitHub App.
 
