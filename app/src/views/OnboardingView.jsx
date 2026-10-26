@@ -70,7 +70,7 @@ export default function OnboardingView() {
       const org = await createOrganization(form.name, form.role)
       await refreshOrganizations()
       setActiveOrg(org.id)
-      navigate('/projects', { replace: true })
+      navigate(`/onboarding/members?org=${encodeURIComponent(org.id)}`, { replace: true })
     } catch (error) {
       setSubmitError(messageForError(error))
     } finally {

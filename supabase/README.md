@@ -2,7 +2,7 @@
 
 ## État
 
-Les 7 migrations sont **appliquées** à la base `Monitoring Project`
+Les 8 migrations sont **appliquées** à la base `Monitoring Project`
 (`ipnepkenbozwoslrhtcj`) : 228 modèles de cas / 684 étapes, 46 policies RLS, 7 sites
 historiques conservés et aucun slug `demoproject`. Les Edge Functions `start-run`,
 `run-manifest` et `report-run` sont déployées ; les secrets `GITHUB_APP_ID` et
@@ -29,6 +29,7 @@ Les migrations ont été appliquées dans cet ordre, avec `supabase db push` :
 5. `20261022120400_v2_05_rls_policies.sql`
 6. `20261022120500_v2_06_report_run.sql`
 7. `20261026120000_v2_07_org_creator_role.sql`
+8. `20261026130000_v2_08_org_invitations.sql`
 
 Les migrations sont additives : elles ne suppriment aucune donnée métier. Elles
 suppriment uniquement deux index redondants sur `crawl_reports`. Pour une nouvelle
@@ -45,6 +46,7 @@ instance, les tester d'abord sur une branche Supabase avant la production.
 | 05 | Policies RLS par organisation + helpers d'accès ; lectures membres, écritures admin ; `ci_run_tokens` réservé au `service_role` |
 | 06 | `create_run_manifest` (manifeste figé prêt pour l'agent + jeton éphémère), `attach_github_run`, `report_run` (ingestion idempotente de `qa_result.json`, cas découverts, cas omis bloqués, compteurs recalculés) — `service_role` uniquement |
 | 07 | `create_organization(p_name, p_role)` accepte le rôle choisi à l'onboarding (`owner`, `admin` ou `member`) et l'applique à l'adhésion du créateur |
+| 08 | `organization_invitations`, `list_organization_team`, `invite_organization_member`, `accept_my_invitations` : ajout direct d'un compte existant, invitation en attente sinon, acceptation automatique à la connexion |
 
 ## Vérifications après application
 

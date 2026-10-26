@@ -30,6 +30,10 @@ const ERROR_MESSAGES = {
   AUTH_INVALID: 'Votre session a expiré. Reconnectez-vous.',
   ORG_FORBIDDEN: "Vous n'avez pas les droits nécessaires dans cette organisation.",
   ORG_NAME_REQUIRED: "Le nom de l'organisation est requis.",
+  ORG_ROLE_INVALID: 'Ce rôle n’est pas valide.',
+  INVITE_EMAIL_INVALID: 'Saisissez une adresse email valide.',
+  INVITE_SELF: 'Vous êtes déjà membre de cette organisation.',
+  INVITE_NOT_FOUND: 'Invitation introuvable ou déjà utilisée.',
   PROJECT_NAME_REQUIRED: 'Le nom du projet est requis.',
   CLIENT_NAME_REQUIRED: 'Le nom du client est requis.',
   PROJECT_URL_INVALID: "L'URL doit commencer par http:// ou https://.",
@@ -141,6 +145,30 @@ export async function createOrganization(name, role = 'owner') {
     role: data.role || role,
     createdAt: data.createdAt,
   }
+}
+
+export async function listOrganizationTeam(orgId) {
+  const { data, error } = await supabase.rpc('list_organization_team', {
+    p_org_id: orgId,
+  })
+  if (error) throw toApiError(error)
+  return Array.isArray(data) ? data : []
+}
+
+export async function inviteOrganizationMember(orgId, email, role = 'member') {
+  const { data, error } = await supabase.rpc('invite_organization_member', {
+    p_org_id: orgId,
+    p_email: String(email || '').trim(),
+    p_role: role,
+  })
+  if (error) throw toApiError(error)
+  return data
+}
+
+export async function acceptMyInvitations() {
+  const { data, error } = await supabase.rpc('accept_my_invitations')
+  if (error) throw toApiError(error)
+  return data
 }
 
 /* -------------------------------------------------------------------------- */

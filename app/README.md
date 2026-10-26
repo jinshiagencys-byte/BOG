@@ -10,6 +10,7 @@ en français ; les écrans d’authentification sont en anglais.
 | --- | --- |
 | `/auth`, `/auth/signup`, `/auth/reset`, `/auth/callback` | Connexion, création de compte, mot de passe oublié, retour OAuth |
 | `/onboarding` | Création de l’organisation (plein page, hors shell) |
+| `/onboarding/members` | Invitation des premiers membres après la création de l’organisation |
 | `/projects` | Espace organisation : projets, plan, état de l’intégration GitHub |
 | `/org-settings` | Intégration GitHub de l’organisation (dépôt, workflow, branche, installation) |
 | `/:project/dashboard` | Tableau de bord réel du projet |
@@ -145,6 +146,10 @@ optimisation naturelle.
   retiré. La confirmation d’email reste obligatoire.
 - **Rôles** : l’onboarding enregistre le rôle du créateur (`owner`, `admin` ou `member`)
   dans `organization_members`.
+- **Invitations** : après la création de l’organisation, `/onboarding/members` permet
+  d’ajouter des membres par email avec un rôle. Un compte existant est ajouté
+  immédiatement ; sinon l’invitation est acceptée automatiquement à sa prochaine
+  connexion. L’envoi d’email d’invitation n’est pas encore branché.
 - La taille d’équipe choisie à l’onboarding n’est pas persistée (choix produit).
 - Les pages « Analyses », « Utilisateurs et rôles » et « Facturation » restent des écrans
   d’attente.

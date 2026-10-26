@@ -3,6 +3,7 @@ import { useLocation } from 'react-router-dom'
 import { AuthCtx } from './auth-context.js'
 import { supabase } from '../lib/supabase.js'
 import {
+  acceptMyInvitations,
   listMemberships,
   resetPassword as resetPasswordApi,
   signInWithOAuth,
@@ -65,6 +66,13 @@ export function AuthProvider({ children }) {
     setOrganizationsLoaded(false)
     setOrganizationsError('')
     try {
+      // Les invitations en attente pour l'email du compte sont transformées en
+      // adhésions avant de relire la liste des organisations.
+      try {
+        await acceptMyInvitations()
+      } catch {
+        /* une invitation non acceptée ne doit pas bloquer le chargement */
+      }
       const rows = await listMemberships(userId)
       setOrganizations(rows)
       return rows

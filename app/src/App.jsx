@@ -4,6 +4,7 @@ import DashboardView from './views/DashboardView.jsx'
 import TestRunsView from './views/TestRunsView.jsx'
 import TestCasesView from './views/TestCasesView.jsx'
 import OnboardingView from './views/OnboardingView.jsx'
+import OnboardingMembersView from './views/OnboardingMembersView.jsx'
 import AuthView from './views/AuthView.jsx'
 import ResetPasswordView from './views/ResetPasswordView.jsx'
 import PlaceholderView from './views/PlaceholderView.jsx'
@@ -48,6 +49,7 @@ export default function App() {
       <Route element={<RequireAuth />}>
         {/* Onboarding : plein page, hors du shell, tant qu'aucune organisation n'existe. */}
         <Route path="/onboarding" element={<OnboardingView />} />
+        <Route path="/onboarding/members" element={<OnboardingMembersView />} />
 
         {/* Espace organisation : sidebar « Workspace / General » + page Projects. */}
         <Route element={<RequireOrg />}>
