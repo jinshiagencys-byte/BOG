@@ -39,6 +39,19 @@ VITE_SUPABASE_ANON_KEY=<anon-key>
 
 Autres scripts : `npm run build`, `npm run preview`, `npm run lint`.
 
+## Authentification
+
+- **Email + mot de passe** : inscription, connexion, confirmation d’email et mot de passe
+  oublié. La confirmation d’email est activée côté Supabase.
+- **Google** : le bouton « Continue with Google » utilise le provider Google de Supabase et
+  revient sur `/auth/callback`. Un refus Google est réaffiché sur l’écran de connexion.
+- Le client OAuth Google doit autoriser
+  `https://<project-ref>.supabase.co/auth/v1/callback`. Les origines de l’app
+  (`http://localhost:5173`, URL de production) doivent figurer dans les redirect URLs
+  Supabase.
+- Aucun secret OAuth n’est stocké dans le dépôt : le Client ID et le Client Secret vivent
+  dans la configuration Auth Supabase.
+
 ## Stack
 
 - **React 19** + **Vite 8**
