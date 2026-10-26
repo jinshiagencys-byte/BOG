@@ -163,10 +163,10 @@ jobs:
           QA_RUN_ID: ${{ inputs.qa_run_id }}
           REPORT_URL: ${{ inputs.report_url }}
           RUN_TOKEN: ${{ inputs.run_token }}
-          IRONBEE_CASE_TIMEOUT_MS: "300000"
-          IRONBEE_DELAY_MS: "6000"
-          IRONBEE_RETRIES: "2"
-          IRONBEE_RETRY_DELAY_MS: "60000"
+          IRONBEE_CASE_TIMEOUT_MS: "150000"
+          IRONBEE_DELAY_MS: "3000"
+          IRONBEE_RETRIES: "1"
+          IRONBEE_RETRY_DELAY_MS: "15000"
           GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         shell: bash
         run: |

@@ -141,12 +141,14 @@ function sleep(ms) {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, ms))
 }
 
-function transientFindings(json) {
-  return (json?.analysis?.findings ?? []).filter((f) =>
-    /ECONNRESET|ERR_CONNECTION|429|too many requests|failed to load resource|timeout/i.test(
-      `${f.title ?? ''} ${f.detail ?? ''}`,
-    ),
+function isTransientFinding(f) {
+  return /ECONNRESET|ERR_CONNECTION|429|too many requests|failed to load resource|timeout/i.test(
+    `${f.title ?? ''} ${f.detail ?? ''}`,
   )
+}
+
+function transientFindings(json) {
+  return (json?.analysis?.findings ?? []).filter(isTransientFinding)
 }
 
 function runIronBeeOnce(c, goal) {
@@ -227,10 +229,13 @@ async function runIronBee(c) {
 
   let run = await runIronBeeOnce(c, goal)
   for (let attempt = 1; attempt <= RETRIES; attempt += 1) {
-    const transient = run.timedOut || !run.json || transientFindings(run.json).length > 0
-    if (!transient) break
+    // Ne jamais rejouer un cas qui a produit un verdict et des preuves.
+    // Les 429 observés dans une page déjà chargée ne doivent pas transformer
+    // un échec produit en trois passages de plusieurs minutes.
+    const technicalFailure = run.timedOut || !run.json
+    if (!technicalFailure) break
     const delay = RETRY_DELAY_MS * attempt
-    console.log(`  ↻ tentative ${attempt + 1}/${RETRIES + 1} dans ${Math.round(delay / 1000)} s (site transitoirement indisponible)`)
+    console.log(`  ↻ tentative ${attempt + 1}/${RETRIES + 1} dans ${Math.round(delay / 1000)} s (sortie IronBee incomplète)`)
     await sleep(delay)
     run = await runIronBeeOnce(c, goal)
   }
@@ -293,7 +298,7 @@ async function verify(c, goal, run, probeBrowser) {
   const finalUrl = json?.finalUrl ?? pages.at(-1)?.url ?? ''
   const maxContentMs = goal.perf?.maxContentMs ?? 5000
   const maxWaitMs = goal.perf?.maxWaitMs ?? 15000
-  const urlOk = !goal.expect?.url || new RegExp(goal.expect.url, 'i').test(finalUrl) || pages.some((p) => new RegExp(goal.expect.url, 'i').test(p.url ?? ''))
+  const ironbeeUrlOk = !goal.expect?.url || new RegExp(goal.expect.url, 'i').test(finalUrl) || pages.some((p) => new RegExp(goal.expect.url, 'i').test(p.url ?? ''))
   const textChecks = (goal.expect?.text ?? []).map((pattern) => ({
     pattern,
     ok: new RegExp(pattern, 'i').test(text),
@@ -305,7 +310,9 @@ async function verify(c, goal, run, probeBrowser) {
   }))
   const ironbeeNegative = negativeChecks.find((x) => x.matched)?.pattern ?? null
   const ironbeeFindings = findings.filter((f) => f.source === 'console' && isSeriousConsole(`${f.title ?? ''} ${f.detail ?? ''}`))
-  const seriousFindings = findings.filter((f) => ['major', 'critical'].includes(f.severity))
+  const seriousFindings = findings.filter((f) =>
+    ['major', 'critical'].includes(f.severity) && !isTransientFinding(f),
+  )
   const transient = transientFindings(json)
   const consolePolicy = goal.expect?.console ?? 'warn'
 
@@ -320,6 +327,9 @@ async function verify(c, goal, run, probeBrowser) {
       })
     : { available: false, reason: 'aucune cible de sonde définie' }
 
+  const probeUrlOk = probe.available &&
+    (!goal.expect?.url || new RegExp(goal.expect.url, 'i').test(probe.url ?? ''))
+  const urlOk = ironbeeUrlOk || probeUrlOk
   const probeTextChecks = probe.available
     ? (goal.probeText || goal.expect?.text || []).map((pattern) => ({
         pattern,
