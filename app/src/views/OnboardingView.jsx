@@ -1,12 +1,13 @@
-// Page d'onboarding « Create your organization » (app.testdino.com/onboarding).
+// Page d'onboarding « Créez votre organisation » (/onboarding).
 //
 // Elle vit **hors du shell** (pas de sidebar ni de header) : c'est l'écran plein
 // page affiché juste après la connexion, tant qu'aucune organisation n'existe.
-// Valider crée l'organisation puis redirige vers `/projects` (l'espace
-// organisation du clone), qui invite à créer un premier projet.
+// Valider crée l'organisation puis redirige vers `/onboarding/members`, l'étape
+// d'invitation de l'équipe.
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import BrandLogo from '../components/BrandLogo.jsx'
+import OnboardingStepper from '../components/OnboardingStepper.jsx'
 import { useApp } from '../app/app-context.js'
 import { useAuth } from '../app/auth-context.js'
 import { createOrganization, messageForError } from '../lib/api.js'
@@ -59,6 +60,8 @@ export default function OnboardingView() {
         <BrandLogo className="td-onb-logo" />
         <span>BOG</span>
       </div>
+
+      <OnboardingStepper current={1} />
 
       <form className="td-onb-card" onSubmit={submit} noValidate>
         <h1 className="td-onb-title">Créez votre organisation</h1>

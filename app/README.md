@@ -86,8 +86,10 @@ app/src/
 │   ├── ProjectSettingsView.jsx
 │   ├── AuthView.jsx
 │   ├── OnboardingView.jsx
+│   ├── OnboardingMembersView.jsx
 │   └── ResetPasswordView.jsx
 ├── components/
+│   ├── OnboardingStepper.jsx # progression Compte → Organisation → Membre
 │   ├── RunDrawer.jsx         # résultats réels, preuves, étapes, GitHub
 │   ├── CommandPalette.jsx    # recherche de runs réels (Ctrl+K)
 │   ├── Skeleton.jsx          # états de chargement
@@ -103,7 +105,9 @@ app/src/
   est envoyé vers `/onboarding`.
 - **Organisations** : `organizations` + `organization_members`. L’organisation active est
   mémorisée dans `localStorage` (`td-active-org`) ; l’id `demo` désigne la démonstration.
-  Rôles `owner`, `admin`, `member`.
+  Rôles `owner`, `admin`, `member`. L’onboarding affiche un stepper
+  `Compte → Organisation → Membre` : l’étape Organisation correspond à `/onboarding`,
+  l’étape Membre à `/onboarding/members`.
 - **Projets** : lignes `sites` filtrées par `org_id` et RLS, enrichies du plan actif et du
   nombre de cas (`listProjectsWithStats`). La création passe par la RPC atomique
   `create_project_with_cases` : le serveur crée le projet, son plan v1 et copie les cas et

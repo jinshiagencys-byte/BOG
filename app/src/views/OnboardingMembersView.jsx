@@ -1,6 +1,6 @@
-// Étape 2 de l'onboarding : rôle du créateur et invitations.
+// Étape 3 de l'onboarding : rôle du créateur et invitations.
 //
-// On y arrive juste après « Créer l’organisation ». Le créateur choisit son
+// On y arrive juste après « Créez votre organisation ». Le créateur choisit son
 // rôle ici, puis peut ajouter plusieurs personnes en une fois. Chaque adresse
 // reçoit un email d'invitation ; l'adhésion n'est créée qu'à la première
 // authentification de la personne dans l'app.
@@ -8,6 +8,7 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import BrandLogo from '../components/BrandLogo.jsx'
 import Icon from '../components/Icon.jsx'
+import OnboardingStepper from '../components/OnboardingStepper.jsx'
 import { useApp } from '../app/app-context.js'
 import { useAuth } from '../app/auth-context.js'
 import {
@@ -286,6 +287,8 @@ export default function OnboardingMembersView() {
         <BrandLogo className="td-onb-logo" />
         <span>BOG</span>
       </Link>
+
+      <OnboardingStepper current={2} wide />
 
       <section className="td-onb-card td-onb-card-wide">
         <h1 className="td-onb-title">Invitez votre équipe</h1>

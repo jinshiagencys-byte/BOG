@@ -2838,6 +2838,77 @@ select.td-control {
   color: hsl(var(--foreground));
 }
 
+/* Stepper « Compte → Organisation → Membre » */
+.td-onb-steps {
+  width: 25rem;
+  max-width: 100%;
+  margin-top: 1.5rem;
+}
+.td-onb-steps-wide {
+  width: 34rem;
+}
+.td-onb-steplist {
+  display: flex;
+  align-items: center;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.td-onb-step {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.td-onb-step:last-child {
+  flex: 0 0 auto;
+}
+.td-onb-step-marker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 1.5rem;
+  height: 1.5rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: 999px;
+  background: hsl(var(--background));
+  color: hsl(var(--muted-foreground));
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1;
+}
+.td-onb-step-label {
+  color: hsl(var(--muted-foreground));
+  font-size: 0.75rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.td-onb-step.is-done .td-onb-step-marker,
+.td-onb-step.is-current .td-onb-step-marker {
+  border-color: hsl(var(--primary));
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+}
+.td-onb-step.is-done .td-onb-step-label,
+.td-onb-step.is-current .td-onb-step-label {
+  color: hsl(var(--foreground));
+}
+.td-onb-step.is-current .td-onb-step-label {
+  font-weight: 600;
+}
+.td-onb-step-line {
+  flex: 1 1 auto;
+  min-width: 0.75rem;
+  height: 1px;
+  margin: 0 0.125rem;
+  background: hsl(var(--border));
+}
+.td-onb-step.is-done .td-onb-step-line {
+  background: hsl(var(--foreground) / 0.55);
+}
+
 .td-onb-card {
   width: 25rem;
   max-width: 100%;
@@ -2847,6 +2918,9 @@ select.td-control {
   border-radius: 0.75rem;
   background: hsl(var(--card));
   color: hsl(var(--card-foreground));
+}
+.td-onb-steps + .td-onb-card {
+  margin-top: 1.25rem;
 }
 
 .td-onb-title {
@@ -3182,6 +3256,15 @@ select.td-control {
 }
 
 @media (max-width: 520px) {
+  .td-onb-step {
+    gap: 0.375rem;
+  }
+  .td-onb-step-label {
+    font-size: 0.6875rem;
+  }
+  .td-onb-step-line {
+    min-width: 0.5rem;
+  }
   .td-onb-invite-row {
     grid-template-columns: minmax(0, 1fr) 2.25rem;
     grid-template-areas:
