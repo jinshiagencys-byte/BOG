@@ -2,7 +2,7 @@
 
 ## État
 
-Les 6 migrations sont **appliquées** à la base `Monitoring Project`
+Les 7 migrations sont **appliquées** à la base `Monitoring Project`
 (`ipnepkenbozwoslrhtcj`) : 228 modèles de cas / 684 étapes, 46 policies RLS, 7 sites
 historiques conservés et aucun slug `demoproject`. Les Edge Functions `start-run`,
 `run-manifest` et `report-run` sont déployées ; les secrets `GITHUB_APP_ID` et
@@ -28,6 +28,7 @@ Les migrations ont été appliquées dans cet ordre, avec `supabase db push` :
 4. `20261022120300_v2_04_runs_github.sql`
 5. `20261022120400_v2_05_rls_policies.sql`
 6. `20261022120500_v2_06_report_run.sql`
+7. `20261026120000_v2_07_org_creator_role.sql`
 
 Les migrations sont additives : elles ne suppriment aucune donnée métier. Elles
 suppriment uniquement deux index redondants sur `crawl_reports`. Pour une nouvelle
@@ -43,6 +44,7 @@ instance, les tester d'abord sur une branche Supabase avant la production.
 | 04 | Métadonnées de run (n° de run, GitHub, branche, env, CI, commit, auteur, PR, tags, durée, compteurs, manifeste, exécuteur, modèle, effets de bord), champs d'échec des résultats (`severity`, `precondition`, `evidence`), `github_integrations`, `ci_run_tokens`, `run_acknowledgements`, corrections d'index et de FK |
 | 05 | Policies RLS par organisation + helpers d'accès ; lectures membres, écritures admin ; `ci_run_tokens` réservé au `service_role` |
 | 06 | `create_run_manifest` (manifeste figé prêt pour l'agent + jeton éphémère), `attach_github_run`, `report_run` (ingestion idempotente de `qa_result.json`, cas découverts, cas omis bloqués, compteurs recalculés) — `service_role` uniquement |
+| 07 | `create_organization(p_name, p_role)` accepte le rôle choisi à l'onboarding (`owner`, `admin` ou `member`) et l'applique à l'adhésion du créateur |
 
 ## Vérifications après application
 

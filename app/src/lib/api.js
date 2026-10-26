@@ -126,9 +126,10 @@ export async function listMemberships(userId) {
   return (data || []).map(mapMembership).filter(Boolean)
 }
 
-export async function createOrganization(name) {
+export async function createOrganization(name, role = 'owner') {
   const { data, error } = await supabase.rpc('create_organization', {
     p_name: String(name || '').trim(),
+    p_role: role,
   })
   if (error) throw toApiError(error)
   return {
@@ -137,7 +138,7 @@ export async function createOrganization(name) {
     slug: data.slug,
     plan: data.plan,
     isDemo: false,
-    role: 'owner',
+    role: data.role || role,
     createdAt: data.createdAt,
   }
 }

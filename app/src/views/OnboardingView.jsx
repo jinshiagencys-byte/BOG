@@ -7,6 +7,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import BrandLogo from '../components/BrandLogo.jsx'
+import Icon from '../components/Icon.jsx'
 import { useApp } from '../app/app-context.js'
 import { useAuth } from '../app/auth-context.js'
 import { createOrganization, messageForError } from '../lib/api.js'
@@ -14,21 +15,43 @@ import { createOrganization, messageForError } from '../lib/api.js'
 // Tailles d'équipe : ce sont les 6 valeurs affichées sur le site réel.
 const TEAM_SIZES = ['1', '2-10', '11-50', '51-100', '101-250', '250+']
 
+// Rôles proposés au créateur de l'organisation. Ils correspondent aux valeurs
+// acceptées par `organization_members.role` et aux contrôles d'accès de l'app.
+const ROLES = [
+  {
+    value: 'owner',
+    label: 'Propriétaire',
+    hint: 'Contrôle total de l’organisation et de ses paramètres.',
+  },
+  {
+    value: 'admin',
+    label: 'Administrateur',
+    hint: 'Peut gérer les projets, les intégrations et les paramètres.',
+  },
+  {
+    value: 'member',
+    label: 'Membre',
+    hint: 'Peut consulter les projets et exécuter les tests.',
+  },
+]
+
 export default function OnboardingView() {
   const navigate = useNavigate()
   const { setActiveOrg } = useApp()
   const { refreshOrganizations } = useAuth()
-  const [form, setForm] = useState({ name: '', teamSize: '' })
+  const [form, setForm] = useState({ name: '', teamSize: '', role: 'admin' })
   const [errors, setErrors] = useState({})
   const [submitError, setSubmitError] = useState('')
   const [submitting, setSubmitting] = useState(false)
+
+  const selectedRole = ROLES.find((role) => role.value === form.role) || ROLES[1]
 
   const set = (key, value) => {
     setForm((f) => ({ ...f, [key]: value }))
     setErrors((e) => (e[key] ? { ...e, [key]: '' } : e))
   }
 
-  // Les deux champs sont marqués obligatoires (`*`) sur le site : on valide à la
+  // Les champs sont marqués obligatoires (`*`) sur le site : on valide à la
   // soumission, on enregistre l'organisation puis on rejoint son espace.
   const submit = async (event) => {
     event.preventDefault()
@@ -36,12 +59,15 @@ export default function OnboardingView() {
     const next = {}
     if (!form.name.trim()) next.name = 'Veuillez saisir le nom de votre organisation.'
     if (!form.teamSize) next.teamSize = 'Veuillez sélectionner la taille de votre équipe.'
+    if (!ROLES.some((role) => role.value === form.role)) {
+      next.role = 'Veuillez sélectionner votre rôle.'
+    }
     setErrors(next)
     if (Object.keys(next).length > 0) return
 
     setSubmitting(true)
     try {
-      const org = await createOrganization(form.name)
+      const org = await createOrganization(form.name, form.role)
       await refreshOrganizations()
       setActiveOrg(org.id)
       navigate('/projects', { replace: true })
@@ -81,6 +107,30 @@ export default function OnboardingView() {
               onChange={(e) => set('name', e.target.value)}
             />
             {errors.name ? <p className="td-onb-error">{errors.name}</p> : null}
+          </div>
+
+          <div className="td-onb-field">
+            <label className="td-onb-label" htmlFor="onb-role">
+              Votre rôle <span className="td-req">*</span>
+            </label>
+            <div className="td-onb-select">
+              <select
+                id="onb-role"
+                className="td-onb-input"
+                value={form.role}
+                aria-invalid={Boolean(errors.role)}
+                onChange={(e) => set('role', e.target.value)}
+              >
+                {ROLES.map((role) => (
+                  <option key={role.value} value={role.value}>
+                    {role.label}
+                  </option>
+                ))}
+              </select>
+              <Icon name="chevron-down" className="td-onb-chevron" />
+            </div>
+            <p className="td-onb-hint">{selectedRole.hint}</p>
+            {errors.role ? <p className="td-onb-error">{errors.role}</p> : null}
           </div>
 
           <div className="td-onb-field">

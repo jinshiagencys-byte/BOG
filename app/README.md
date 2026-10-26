@@ -141,8 +141,10 @@ optimisation naturelle.
 
 ## Limites connues
 
-- Les boutons OAuth Google / SSO affichent un message : seuls l’e-mail et le mot de passe
-  sont configurés sur ce déploiement.
+- **Authentification** : Google OAuth est configuré côté Supabase ; le bouton SSO a été
+  retiré. La confirmation d’email reste obligatoire.
+- **Rôles** : l’onboarding enregistre le rôle du créateur (`owner`, `admin` ou `member`)
+  dans `organization_members`.
 - La taille d’équipe choisie à l’onboarding n’est pas persistée (choix produit).
 - Les pages « Analyses », « Utilisateurs et rôles » et « Facturation » restent des écrans
   d’attente.
