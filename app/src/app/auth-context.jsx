@@ -5,6 +5,7 @@ import { supabase } from '../lib/supabase.js'
 import {
   listMemberships,
   resetPassword as resetPasswordApi,
+  signInWithOAuth,
   signInWithPassword,
   signOut as signOutApi,
   signUpWithPassword,
@@ -106,6 +107,8 @@ export function AuthProvider({ children }) {
     [],
   )
 
+  const signInWithGoogle = useCallback(() => signInWithOAuth('google'), [])
+
   const value = useMemo(
     () => ({
       session,
@@ -120,6 +123,7 @@ export function AuthProvider({ children }) {
       signUp,
       signOut,
       resetPassword,
+      signInWithGoogle,
     }),
     [
       session,
@@ -133,6 +137,7 @@ export function AuthProvider({ children }) {
       signUp,
       signOut,
       resetPassword,
+      signInWithGoogle,
     ],
   )
 

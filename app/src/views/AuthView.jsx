@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import Icon from '../components/Icon.jsx'
 import { useAuth } from '../app/auth-context.js'
 import { DEMO_PROJECT_SLUG } from '../app/projects.js'
@@ -14,6 +14,9 @@ function authMessage(error) {
   }
   if (raw.includes('user already registered')) {
     return 'An account already exists with this email address.'
+  }
+  if (raw.includes('provider is not enabled') || raw.includes('unsupported provider')) {
+    return 'Google sign-in is not enabled on this deployment yet.'
   }
   if (raw.includes('password')) {
     return 'Password must be at least 8 characters long.'
@@ -48,7 +51,8 @@ function GoogleMark() {
 export default function AuthView({ mode = 'signin' }) {
   const isSignup = mode === 'signup'
   const navigate = useNavigate()
-  const { signIn, signUp, resetPassword } = useAuth()
+  const location = useLocation()
+  const { signIn, signUp, resetPassword, signInWithGoogle } = useAuth()
 
   // Adresse mémorisée depuis une connexion précédente (état initial, sans effet).
   const [form, setForm] = useState(() => {
@@ -65,7 +69,7 @@ export default function AuthView({ mode = 'signin' }) {
   const [showPassword, setShowPassword] = useState(false)
   const [remember, setRemember] = useState(() => Boolean(form.email))
   const [terms, setTerms] = useState(false)
-  const [error, setError] = useState('')
+  const [error, setError] = useState(() => location.state?.authError || '')
   const [notice, setNotice] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
@@ -130,8 +134,21 @@ export default function AuthView({ mode = 'signin' }) {
     }
   }
 
-  const oauth = (provider) =>
-    setNotice(`${provider} sign-in is not configured on this deployment.`)
+  const oauth = async (provider) => {
+    setError('')
+    setNotice('')
+    if (provider !== 'Google') {
+      setNotice(`${provider} sign-in is not configured on this deployment.`)
+      return
+    }
+    setSubmitting(true)
+    try {
+      await signInWithGoogle()
+    } catch (oauthError) {
+      setError(authMessage(oauthError))
+      setSubmitting(false)
+    }
+  }
 
   const forgot = async () => {
     setError('')
@@ -163,13 +180,23 @@ export default function AuthView({ mode = 'signin' }) {
           {isSignup ? 'Create your account' : 'Sign in to TestDino'}
         </h1>
 
-        <button type="button" className="td-auth-oauth" onClick={() => oauth('Google')}>
+        <button
+          type="button"
+          className="td-auth-oauth"
+          onClick={() => oauth('Google')}
+          disabled={submitting}
+        >
           <GoogleMark />
           <span>Continue with Google</span>
         </button>
 
         {!isSignup ? (
-          <button type="button" className="td-auth-oauth" onClick={() => oauth('SSO')}>
+          <button
+            type="button"
+            className="td-auth-oauth"
+            onClick={() => oauth('SSO')}
+            disabled={submitting}
+          >
             <Icon name="building-2" className="td-auth-sso" />
             <span>Continue with SSO</span>
           </button>

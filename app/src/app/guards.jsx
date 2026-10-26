@@ -53,8 +53,26 @@ export function ProjectGate({ children }) {
 
 export function AuthCallback() {
   const navigate = useNavigate()
+  const location = useLocation()
 
   useEffect(() => {
+    // Un refus Google revient avec `?error=...` ou `#error=...` avant même
+    // l'échange du code : on l'affiche sur l'écran de connexion.
+    const query = new URLSearchParams(location.search)
+    const hash = new URLSearchParams(location.hash.replace(/^#/, ''))
+    const oauthError =
+      query.get('error_description') ||
+      hash.get('error_description') ||
+      query.get('error') ||
+      hash.get('error')
+    if (oauthError) {
+      navigate('/auth', {
+        replace: true,
+        state: { authError: decodeURIComponent(oauthError) },
+      })
+      return undefined
+    }
+
     let mounted = true
     supabase.auth.getSession().then(({ data }) => {
       if (!mounted) return
@@ -63,7 +81,7 @@ export function AuthCallback() {
     return () => {
       mounted = false
     }
-  }, [navigate])
+  }, [location.hash, location.search, navigate])
 
   return <FullPageLoader label="Finalisation de la connexion…" />
 }
