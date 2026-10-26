@@ -147,9 +147,10 @@ optimisation naturelle.
 - **Rôles** : l’onboarding enregistre le rôle du créateur (`owner`, `admin` ou `member`)
   dans `organization_members`.
 - **Invitations** : après la création de l’organisation, `/onboarding/members` permet
-  d’ajouter des membres par email avec un rôle. Un compte existant est ajouté
-  immédiatement ; sinon l’invitation est acceptée automatiquement à sa prochaine
-  connexion. L’envoi d’email d’invitation n’est pas encore branché.
+  d’ajouter plusieurs membres en une fois (bouton « Ajouter une ligne »), avec un
+  rôle par ligne. Un compte existant est ajouté immédiatement ; sinon l’invitation
+  est acceptée automatiquement à sa prochaine connexion. L’envoi d’email
+  d’invitation n’est pas encore branché.
 - La taille d’équipe choisie à l’onboarding n’est pas persistée (choix produit).
 - Les pages « Analyses », « Utilisateurs et rôles » et « Facturation » restent des écrans
   d’attente.
