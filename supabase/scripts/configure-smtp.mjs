@@ -87,7 +87,7 @@ const magicLinkContent = [
 
 const body = {
   smtp_host: smtpHost,
-  smtp_port: smtpPort,
+  smtp_port: String(smtpPort),
   smtp_user: smtpUser,
   smtp_pass: smtpPass,
   smtp_admin_email: adminEmail,
