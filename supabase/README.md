@@ -227,7 +227,27 @@ L'écran `/onboarding/members` enregistre les invitations, puis appelle
 défaut (gratuit, sans SMTP personnalisé), Supabase impose **2 emails par heure** et
 refuse la personnalisation des modèles. Les invitations au-delà de cette limite restent
 `pending` et s'activent à la première connexion de la personne, mais l'email n'est pas
-envoyé. Il faut configurer Resend, Brevo, Postmark ou un autre SMTP pour un usage réel.
+envoyé.
+
+Des offres gratuites existent : **Brevo** (300 emails/jour, expéditeur vérifié sans
+domaine), **Resend** (100 emails/jour, domaine ou adresse de test) ou **Mailjet**
+(200 emails/jour). Brevo est le plus simple pour envoyer à n'importe quelle adresse
+après vérification d'une seule adresse expéditrice.
+
+1. Créer le compte du fournisseur et vérifier l'adresse expéditrice.
+2. Renseigner les variables dans `supabase/.env.local` :
+   `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_ADMIN_EMAIL`,
+   `SMTP_SENDER_NAME` et éventuellement `EMAIL_RATE_LIMIT`.
+3. Lancer :
+
+```bash
+node supabase/scripts/configure-smtp.mjs
+```
+
+Le script configure le SMTP, relève la limite d'envoi et applique les modèles
+d'invitation BOG. Il n'affiche jamais le mot de passe SMTP. Brevo utilise
+`smtp-relay.brevo.com:587` ; Resend utilise `smtp.resend.com:465` avec l'utilisateur
+`resend` et la clé API comme mot de passe.
 
 Côté GitHub Actions, le secret `OPENCODE_API_KEY` est **obligatoire** pour fastbrowse :
 le workflow s'arrête avec un message explicite s'il manque. Il alimente le LLM et Jev, et
