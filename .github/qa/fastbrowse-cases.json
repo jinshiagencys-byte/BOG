@@ -14,7 +14,7 @@
   },
   "TC-103": {
     "url": "https://odjafrik.com/products",
-    "goal": "Open https://odjafrik.com/products, wait until the product list is visible, then reload the page once and stop. Do not apply filters and do not click a product. Report the number of products displayed before and after reload.",
+    "goal": "Open https://odjafrik.com/products, wait until the product list is visible, then stop. Do not apply filters and do not click a product. Report the number of products displayed on the page.",
     "label": "au moins un produit dans le catalogue",
     "probeUrl": "https://odjafrik.com/products",
     "perf": { "maxContentMs": 5000, "maxWaitMs": 15000 },

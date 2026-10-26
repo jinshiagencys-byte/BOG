@@ -1,9 +1,12 @@
-name: IronBee QA — TestDino-like run
+name: fastbrowse QA — TestDino-like run
 
 # Exécution d'un run sélectionné depuis l'application.
-# IronBee Express pilote un Chrome réel et Jev prend les décisions via
-# l'endpoint OpenRouter compatible TypeSafe. Le runner du dépôt garde la
-# propriété des assertions : le verdict d'IronBee ne suffit pas à valider un cas.
+# fastbrowse pilote un Chrome réel avec Jev pour choisir les contrôles et
+# un LLM pour planifier/lire la page. Le runner du dépôt garde la propriété
+# des assertions : le verdict de fastbrowse ne suffit pas à valider un cas.
+#
+# Une seule clé est nécessaire : le secret GitHub OPENCODE_API_KEY.
+# Elle alimente le LLM et Jev via OpenCode Console.
 
 on:
   workflow_dispatch:
@@ -33,13 +36,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: ironbee-qa-${{ inputs.qa_run_id }}
+  group: fastbrowse-qa-${{ inputs.qa_run_id }}
   cancel-in-progress: false
 
 jobs:
-  ironbee-qa:
+  fastbrowse-qa:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -67,27 +70,40 @@ jobs:
             google-chrome-stable --version
           fi
 
-      - name: Construire IronBee Express
+      - name: Installer uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Construire fastbrowse
         shell: bash
         env:
-          PATCHRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+          FASTBROWSE_COMMIT: e46c12a14e5cf5034e69eb7d5a21856eb0f0dc27
+          UV_PYTHON: "3.13"
+        run: |
+          set -euo pipefail
+          rm -rf _fastbrowse
+          mkdir _fastbrowse
+          cd _fastbrowse
+          git init -q
+          git remote add origin https://github.com/agent-labs-dev/fastbrowse.git
+          # Commit épinglé : même version que celle validée en CLI locale.
+          git fetch -q --depth 1 origin "$FASTBROWSE_COMMIT"
+          git checkout -q FETCH_HEAD
+          uv sync --frozen --no-dev
+          test -x .venv/bin/fastbrowse
+          echo "✓ $(.venv/bin/fastbrowse --version)"
+
+      - name: Installer la sonde Playwright
+        shell: bash
+        env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
         run: |
           set -euo pipefail
-          rm -rf _ironbee
-          # Commit épinglé : le paquet npm n'est pas publié et le dépôt amont
-          # peut évoluer. On rebuild exactement la version validée en QA.
-          IRONBEE_COMMIT=5e547b7844f1e52a1e6fbd8bedb1b2a926b79a49
-          mkdir _ironbee
-          cd _ironbee
-          git init -q
-          git remote add origin https://github.com/ironbee-ai/ironbee-express.git
-          git fetch -q --depth 1 origin "$IRONBEE_COMMIT"
-          git checkout -q FETCH_HEAD
-          npm ci --no-audit --no-fund
-          npm run build
-          test -s dist/cli/main.js
-          echo "✓ IronBee $(node dist/cli/main.js --version 2>/dev/null || echo 'build ok')"
+          mkdir -p "$RUNNER_TEMP/qa-node"
+          npm install --prefix "$RUNNER_TEMP/qa-node" --no-audit --no-fund playwright-core@1.64.1
+          NODE_PATH="$RUNNER_TEMP/qa-node/node_modules" \
+            node -e "console.log('✓ playwright-core', require('playwright-core/package.json').version)"
 
       - name: Récupérer le manifeste du run
         env:
@@ -102,38 +118,18 @@ jobs:
             -H "x-run-token: $RUN_TOKEN" "$MANIFEST_URL" -o run_manifest.json
           jq -e '.cases | type == "array" and length > 0' run_manifest.json >/dev/null
 
-      - name: Charger la clé OpenRouter
+      - name: Vérifier la clé OpenCode
         shell: bash
         env:
-          GITHUB_OPENROUTER_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          MANIFEST_URL: ${{ inputs.manifest_url }}
-          RUN_TOKEN: ${{ inputs.run_token }}
-          QA_RUN_ID: ${{ inputs.qa_run_id }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         run: |
           set -euo pipefail
-          if [ -n "${GITHUB_OPENROUTER_KEY:-}" ]; then
-            KEY="$GITHUB_OPENROUTER_KEY"
-            echo "✓ Clé OpenRouter lue depuis le secret GitHub"
-          else
-            # Repli autonome : la clé reste côté Supabase et n'est remise
-            # qu'au workflow porteur du jeton de run, jamais au navigateur.
-            CREDENTIALS_URL=$(printf '%s' "$MANIFEST_URL" | sed 's#/run-manifest.*#/qa-credentials#')
-            RESP=$(curl -fsS --retry 3 --retry-delay 2 \
-              -H "x-run-token: $RUN_TOKEN" \
-              "$CREDENTIALS_URL?run_id=$QA_RUN_ID")
-            KEY=$(printf '%s' "$RESP" | jq -r '.openrouter_api_key // empty')
-            if [ -z "$KEY" ]; then
-              echo "::error::qa-credentials n'a pas renvoyé de clé OpenRouter"
-              exit 1
-            fi
-            echo "✓ Clé OpenRouter lue depuis qa-credentials"
+          if [ -z "${OPENCODE_API_KEY:-}" ]; then
+            echo "::error::Secret GitHub OPENCODE_API_KEY absent. Ajoute la clé OpenCode Console dans Settings → Secrets and variables → Actions."
+            exit 1
           fi
-          echo "::add-mask::$KEY"
-          {
-            echo "OPENROUTER_API_KEY<<EOF"
-            printf '%s\n' "$KEY"
-            echo "EOF"
-          } >> "$GITHUB_ENV"
+          echo "::add-mask::$OPENCODE_API_KEY"
+          echo "✓ Clé OpenCode lue depuis le secret GitHub"
 
       - name: Déterminer l'URL cible
         id: target
@@ -152,10 +148,12 @@ jobs:
           echo "🎯 Cible : $TARGET_URL"
           echo "🧪 Cas : $(jq '.cases | length' run_manifest.json)"
 
-      - name: Exécuter les cas avec IronBee
+      - name: Exécuter les cas avec fastbrowse
         id: qa
         env:
-          IRONBEE_DIR: ${{ github.workspace }}/_ironbee
+          FASTBROWSE_CLI: ${{ github.workspace }}/_fastbrowse/.venv/bin/fastbrowse
+          FASTBROWSE_DIR: ${{ github.workspace }}/_fastbrowse
+          NODE_PATH: ${{ runner.temp }}/qa-node/node_modules
           RUN_MANIFEST: ${{ github.workspace }}/run_manifest.json
           QA_OUTPUT: ${{ github.workspace }}/qa_result.json
           QA_CACHE_DIR: ${{ github.workspace }}/.qa-cache
@@ -163,26 +161,37 @@ jobs:
           QA_RUN_ID: ${{ inputs.qa_run_id }}
           REPORT_URL: ${{ inputs.report_url }}
           RUN_TOKEN: ${{ inputs.run_token }}
-          IRONBEE_CASE_TIMEOUT_MS: "150000"
-          IRONBEE_DELAY_MS: "3000"
-          IRONBEE_RETRIES: "1"
-          IRONBEE_RETRY_DELAY_MS: "15000"
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          TYPESAFE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          FASTBROWSE_LLM_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          FASTBROWSE_LLM_BASE_URL: https://opencode.ai/inference/openai/v1
+          FASTBROWSE_LLM_MODEL: deepseek-v4.1-flash
+          FASTBROWSE_JEV_SOURCE: typesafe
+          FASTBROWSE_JEV_BASE_URL: https://opencode.ai/inference/systemone
+          FASTBROWSE_JEV_MODEL: jev-1.13
+          FASTBROWSE_CHROME: /usr/bin/google-chrome
+          FASTBROWSE_CASE_TIMEOUT_MS: "120000"
+          FASTBROWSE_DELAY_MS: "2000"
+          FASTBROWSE_RETRIES: "1"
+          FASTBROWSE_RETRY_DELAY_MS: "15000"
+          FASTBROWSE_MAX_STEPS: "25"
+          FASTBROWSE_MAX_DOLLARS: "0.10"
           GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         shell: bash
         run: |
           set +e
-          node .github/qa/ironbee-runner.mjs
+          node .github/qa/fastbrowse-runner.mjs
           CODE=$?
           echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
           if [ "$CODE" -ne 0 ]; then
-            echo "::warning::Le runner IronBee s'est terminé avec le code $CODE"
+            echo "::warning::Le runner fastbrowse s'est terminé avec le code $CODE"
           fi
 
       - name: Archiver les preuves QA
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ironbee-qa-${{ inputs.qa_run_id }}
+          name: fastbrowse-qa-${{ inputs.qa_run_id }}
           path: |
             qa_result.json
             run_manifest.json

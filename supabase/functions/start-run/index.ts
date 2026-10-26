@@ -159,12 +159,16 @@ Deno.serve(async (req) => {
     ?? configuredModel
     ?? 'big-pickle';
 
-  // IronBee est l'exécuteur par défaut. Antigravity reste disponible en
-  // fallback explicite pendant la transition.
-  const executor = body.executor === 'antigravity' ? 'antigravity' : 'ironbee';
-  const workflowFile = executor === 'ironbee'
-    ? 'ironbee-qa.yml'
+  // fastbrowse est l'exécuteur par défaut. Antigravity reste disponible en
+  // fallback explicite ; IronBee n'est plus déclenché.
+  const executor = body.executor === 'antigravity' ? 'antigravity' : 'fastbrowse';
+  const workflowFile = executor === 'fastbrowse'
+    ? 'fastbrowse-qa.yml'
     : integration.workflow_file || 'antigravity-qa.yml';
+
+  // Le manifeste SQL reste figé sur son ancien libellé ; on aligne la ligne du
+  // run tout de suite pour que l'UI et les rapports partiels soient cohérents.
+  await service.from('test_runs').update({ executor }).eq('id', runId);
   const inputs: Record<string, string> = {
     qa_run_id: runId,
     manifest_url: manifestUrl,

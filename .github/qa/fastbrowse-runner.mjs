@@ -1,15 +1,16 @@
 #!/usr/bin/env node
 /**
- * IronBee QA runner.
+ * fastbrowse QA runner.
  *
- * The runner owns the test plan and the assertions. IronBee owns the browser
- * goal, the typed Jev decisions and the evidence review (page, API, console).
+ * The runner owns the test plan and the assertions. fastbrowse owns the browser
+ * task: it plans with the LLM, chooses controls with Jev, and returns the final
+ * URL, cited page evidence, step log and cost.
  *
- * This is deliberately not "trust the agent's verdict": a case passes only
- * when our own expectations match IronBee's evidence. A blocked IronBee run
- * can still be a passing case when the page evidence proves the expectation
- * (for example: "the category page lists products" while Jev keeps asking
- * whether the goal is done).
+ * This is deliberately not "trust the agent's verdict": a case passes only when
+ * our own expectations match fastbrowse's evidence, or when the independent
+ * page probe proves the expected content. A case that fastbrowse stopped short
+ * of can still pass when the page probe proves the user-visible expectation
+ * (for example: "the category page lists products").
  */
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -21,17 +22,23 @@ import { openProbe, probeUrl } from './page-probe.mjs'
 const HERE = dirname(fileURLToPath(import.meta.url))
 
 function readEnvFile(file) {
-  const out = {}
-  if (!existsSync(file)) return out
-  for (const raw of readFileSync(file, 'utf8').split(/\r?\n/)) {
-    const line = raw.trim()
-    if (!line || line.startsWith('#') || !line.includes('=')) continue
-    const i = line.indexOf('=')
-    let value = line.slice(i + 1).trim()
+  if (!existsSync(file)) return {}
+  const raw = {}
+  for (const line of readFileSync(file, 'utf8').split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#') || !trimmed.includes('=')) continue
+    const i = trimmed.indexOf('=')
+    let value = trimmed.slice(i + 1).trim()
     if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
       value = value.slice(1, -1)
     }
-    out[line.slice(0, i).trim()] = value
+    raw[trimmed.slice(0, i).trim()] = value
+  }
+  const out = {}
+  for (const [key, value] of Object.entries(raw)) {
+    out[key] = value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, name) => (
+      out[name] ?? raw[name] ?? process.env[name] ?? ''
+    ))
   }
   return out
 }
@@ -46,31 +53,51 @@ function env(name, fallback = '') {
 }
 
 const ROOT = resolve(env('QA_ROOT', join(HERE, '..', '..')))
-const IRONBEE_DIR = resolve(env('IRONBEE_DIR', '/tmp/opencode/ironbee-express'))
-const IRONBEE_CLI = resolve(env('IRONBEE_CLI', join(IRONBEE_DIR, 'dist', 'cli', 'main.js')))
-const GOALS_FILE = resolve(env('IRONBEE_CASES', join(HERE, 'ironbee-cases.json')))
+const FASTBROWSE_DIR = resolve(env('FASTBROWSE_DIR', join(ROOT, '..', 'fastbrowse')))
+const LOCAL_CLI = join(FASTBROWSE_DIR, '.venv', 'bin', 'fastbrowse')
+const FASTBROWSE_CLI = env('FASTBROWSE_CLI', existsSync(LOCAL_CLI) ? LOCAL_CLI : 'fastbrowse')
+const GOALS_FILE = resolve(env('FASTBROWSE_CASES', join(HERE, 'fastbrowse-cases.json')))
 const PLAN_FILE = resolve(env('PLAN_FILE', join(ROOT, 'plan-cases.json')))
 const MANIFEST_FILE = resolve(env('RUN_MANIFEST', join(ROOT, 'run_manifest.json')))
 const OUTPUT_FILE = resolve(env('QA_OUTPUT', join(ROOT, 'qa_result.json')))
 const CACHE_DIR = resolve(env('QA_CACHE_DIR', '/tmp/opencode/qa-cache'))
 const TARGET_URL = env('TARGET_URL', 'https://odjafrik.com')
-const MAX_CASE_MS = Number(env('IRONBEE_CASE_TIMEOUT_MS', '240000'))
-const REUSE_CACHE = env('IRONBEE_REUSE') === '1'
-const CASE_DELAY_MS = Number(env('IRONBEE_DELAY_MS', '4000'))
-const RETRIES = Number(env('IRONBEE_RETRIES', '1'))
-const RETRY_DELAY_MS = Number(env('IRONBEE_RETRY_DELAY_MS', '45000'))
-const ONLY = env('CASE_CODES', '').split(',').map((v) => v.trim()).filter(Boolean)
+const MAX_CASE_MS = Number(env('FASTBROWSE_CASE_TIMEOUT_MS', '120000'))
+const REUSE_CACHE = env('FASTBROWSE_REUSE') === '1'
+const CASE_DELAY_MS = Number(env('FASTBROWSE_DELAY_MS', '2000'))
+const RETRIES = Number(env('FASTBROWSE_RETRIES', '1'))
+const RETRY_DELAY_MS = Number(env('FASTBROWSE_RETRY_DELAY_MS', '15000'))
+const MAX_STEPS = Number(env('FASTBROWSE_MAX_STEPS', '25'))
+const MAX_DOLLARS = Number(env('FASTBROWSE_MAX_DOLLARS', '0.10'))
+const ONLY = env('CASE_CODES', '').split(',').map((value) => value.trim()).filter(Boolean)
 
-const ironbeeEnv = {
-  ...readEnvFile(join(IRONBEE_DIR, '.env')),
+const fastbrowseEnv = {
+  ...readEnvFile(join(FASTBROWSE_DIR, '.env')),
   ...process.env,
 }
-if (!ironbeeEnv.TYPESAFE_API_KEY && ironbeeEnv.OPENROUTER_API_KEY) {
-  ironbeeEnv.TYPESAFE_API_KEY = ironbeeEnv.OPENROUTER_API_KEY
+const openCodeKey = fastbrowseEnv.OPENCODE_API_KEY
+  || fastbrowseEnv.TYPESAFE_API_KEY
+  || fastbrowseEnv.FASTBROWSE_LLM_API_KEY
+  || ''
+if (openCodeKey) {
+  fastbrowseEnv.OPENCODE_API_KEY = openCodeKey
+  fastbrowseEnv.TYPESAFE_API_KEY = openCodeKey
+  fastbrowseEnv.FASTBROWSE_LLM_API_KEY = openCodeKey
 }
-ironbeeEnv.TYPESAFE_URL ||= 'https://openrouter.ai/api/v1/systemone'
-ironbeeEnv.TYPESAFE_MODEL ||= 'jev-latest'
-ironbeeEnv.IBEXPRESS_HEADLESS ||= 'true'
+fastbrowseEnv.FASTBROWSE_LLM_BASE_URL ||= 'https://opencode.ai/inference/openai/v1'
+fastbrowseEnv.FASTBROWSE_LLM_MODEL ||= 'deepseek-v4.1-flash'
+fastbrowseEnv.FASTBROWSE_JEV_SOURCE ||= 'typesafe'
+fastbrowseEnv.FASTBROWSE_JEV_BASE_URL ||= 'https://opencode.ai/inference/systemone'
+fastbrowseEnv.FASTBROWSE_JEV_MODEL ||= 'jev-1.13'
+// Une seule clé, un seul fournisseur : aucun repli silencieux.
+delete fastbrowseEnv.OPENROUTER_API_KEY
+delete fastbrowseEnv.AI_GATEWAY_API_KEY
+delete fastbrowseEnv.BROWSER_USE_API_KEY
+
+if (!openCodeKey) {
+  console.error('OPENCODE_API_KEY manquante. Renseigne le secret GitHub OPENCODE_API_KEY.')
+  process.exit(2)
+}
 
 const goals = readJson(GOALS_FILE, {})
 const manifest = readJson(MANIFEST_FILE, null)
@@ -116,21 +143,23 @@ const cases = rawCases
   .filter((c) => c.code && (!ONLY.length || ONLY.includes(c.code)))
 
 if (!cases.length) {
-  console.error('Aucun cas à exécuter. Vérifie PLAN_FILE/RUN_MANIFEST et CASE_CODES.')
-  process.exit(2)
-}
-if (!existsSync(IRONBEE_CLI)) {
-  console.error(`IronBee CLI introuvable: ${IRONBEE_CLI}`)
+  console.error('Aucun cas à exécuter. Vérifie RUN_MANIFEST/PLAN_FILE et CASE_CODES.')
   process.exit(2)
 }
 
 function defaultGoal(c) {
   return {
     url: TARGET_URL,
-    goal: `On ${TARGET_URL}, verify this test case: "${c.title}". ${c.steps.map((s) => `${s.n}. ${s.action} (attendu: ${s.expected})`).join(' ')} Stop when the page clearly shows the result. Do not perform unrelated actions.`,
+    goal: `On ${TARGET_URL}, verify this test case: "${c.title}". ${c.steps.map((s) => `${s.n}. ${s.action} (attendu: ${s.expected})`).join(' ')} Stop when the page clearly shows the result. Do not perform unrelated actions and do not submit a payment.`,
     label: c.title,
+    mapped: false,
     expect: { url: '', text: [], console: 'warn' },
   }
+}
+
+function goalFor(c) {
+  const configured = goals[c.code]
+  return configured ? { ...configured, mapped: true } : defaultGoal(c)
 }
 
 function cachePath(code) {
@@ -141,109 +170,8 @@ function sleep(ms) {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, ms))
 }
 
-function isTransientFinding(f) {
-  return /ECONNRESET|ERR_CONNECTION|429|too many requests|failed to load resource|timeout/i.test(
-    `${f.title ?? ''} ${f.detail ?? ''}`,
-  )
-}
-
-function transientFindings(json) {
-  return (json?.analysis?.findings ?? []).filter(isTransientFinding)
-}
-
-function runIronBeeOnce(c, goal) {
-  const args = [
-    IRONBEE_CLI,
-    'run',
-    '--url', goal.url || TARGET_URL,
-    '--goal', goal.goal,
-    '--json',
-  ]
-  return new Promise((resolvePromise) => {
-    const started = performance.now()
-    let stdout = ''
-    let stderr = ''
-    let timedOut = false
-    const child = spawn(process.execPath, args, {
-      cwd: IRONBEE_DIR,
-      env: ironbeeEnv,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
-    const timer = setTimeout(() => {
-      timedOut = true
-      child.kill('SIGKILL')
-    }, MAX_CASE_MS)
-    child.stdout.on('data', (chunk) => { stdout += chunk })
-    child.stderr.on('data', (chunk) => { stderr += chunk })
-    child.on('close', (code) => {
-      clearTimeout(timer)
-      let json = null
-      let parseError = null
-      try {
-        json = JSON.parse(stdout)
-      } catch (error) {
-        parseError = error.message
-      }
-      const run = {
-        goal,
-        exitCode: code,
-        timedOut,
-        durationMs: Math.round(performance.now() - started),
-        json,
-        parseError,
-        stderr: stderr.slice(-4000),
-        cached: false,
-      }
-      if (json) {
-        mkdirSync(CACHE_DIR, { recursive: true })
-        writeFileSync(cachePath(c.code), JSON.stringify({
-          json,
-          stderr: run.stderr,
-          durationMs: run.durationMs,
-          savedAt: new Date().toISOString(),
-        }, null, 2))
-      }
-      resolvePromise(run)
-    })
-  })
-}
-
-async function runIronBee(c) {
-  const goal = goals[c.code] ?? defaultGoal(c)
-
-  if (REUSE_CACHE && existsSync(cachePath(c.code))) {
-    const cached = readJson(cachePath(c.code), null)
-    if (cached?.json) {
-      return {
-        goal,
-        exitCode: 0,
-        timedOut: false,
-        durationMs: cached.durationMs ?? 0,
-        json: cached.json,
-        parseError: null,
-        stderr: cached.stderr ?? '',
-        cached: true,
-      }
-    }
-  }
-
-  let run = await runIronBeeOnce(c, goal)
-  for (let attempt = 1; attempt <= RETRIES; attempt += 1) {
-    // Ne jamais rejouer un cas qui a produit un verdict et des preuves.
-    // Les 429 observés dans une page déjà chargée ne doivent pas transformer
-    // un échec produit en trois passages de plusieurs minutes.
-    const technicalFailure = run.timedOut || !run.json
-    if (!technicalFailure) break
-    const delay = RETRY_DELAY_MS * attempt
-    console.log(`  ↻ tentative ${attempt + 1}/${RETRIES + 1} dans ${Math.round(delay / 1000)} s (sortie IronBee incomplète)`)
-    await sleep(delay)
-    run = await runIronBeeOnce(c, goal)
-  }
-  return run
-}
-
-function textOf(json) {
-  return (json?.journey?.pages ?? []).map((p) => p.excerpt ?? '').join('\n')
+function cleanText(value, max = 700) {
+  return String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, max)
 }
 
 function formatMs(ms) {
@@ -251,8 +179,46 @@ function formatMs(ms) {
   return `${(ms / 1000).toFixed(1).replace('.', ',')} s`
 }
 
-function cleanText(value, max = 700) {
-  return String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, max)
+function textOf(json) {
+  const chunks = []
+  if (json?.answer) chunks.push(json.answer)
+  for (const evidence of json?.evidence ?? []) {
+    if (evidence?.quote) chunks.push(evidence.quote)
+  }
+  for (const step of json?.steps ?? []) {
+    if (step?.note) chunks.push(step.note)
+    for (const fact of step?.facts ?? []) {
+      if (fact?.text) chunks.push(fact.text)
+      if (fact?.quote) chunks.push(fact.quote)
+    }
+  }
+  if (json?.data != null) chunks.push(JSON.stringify(json.data))
+  return chunks.filter(Boolean).join('\n')
+}
+
+function pagesOf(json) {
+  const pages = new Map()
+  const add = (url, title, excerpt) => {
+    if (!url) return
+    const previous = pages.get(url) ?? { url, title: '', excerpt: '' }
+    pages.set(url, {
+      url,
+      title: previous.title || title || '',
+      excerpt: [previous.excerpt, excerpt].filter(Boolean).join('\n').slice(0, 4000),
+    })
+  }
+  for (const step of json?.steps ?? []) add(step.url, step.target, step.note)
+  for (const evidence of json?.evidence ?? []) {
+    add(evidence.url, (evidence.heading_path ?? []).slice(-2).join(' > '), evidence.quote)
+  }
+  return [...pages.values()]
+}
+
+function finalUrlOf(json) {
+  return json?.final_url
+    || [...(json?.steps ?? [])].reverse().find((step) => step?.url)?.url
+    || [...(json?.evidence ?? [])].reverse().find((item) => item?.url)?.url
+    || ''
 }
 
 function productCountOf(text) {
@@ -290,31 +256,156 @@ function uniqueStrings(values) {
   return [...new Set(values.filter(Boolean).map((value) => String(value).trim()).filter(Boolean))]
 }
 
+function isTransient(value) {
+  return /ECONNRESET|ERR_CONNECTION|429|too many requests|failed to load resource|timeout|unavailable|502|503|504/i.test(
+    String(value ?? ''),
+  )
+}
+
+function transientOf(run) {
+  const text = `${run.json?.error ?? ''}\n${run.stderr ?? ''}`
+  if (!isTransient(text)) return []
+  return [{
+    source: 'fastbrowse',
+    severity: 'minor',
+    title: cleanText(run.json?.error || run.stderr || 'fournisseur temporairement indisponible', 240),
+    detail: '',
+  }]
+}
+
+function runFastbrowseOnce(c, goal) {
+  const maxSteps = Number(goal.maxSteps ?? MAX_STEPS)
+  const maxDollars = Number(goal.maxDollars ?? MAX_DOLLARS)
+  const args = [
+    goal.goal,
+    '--start', goal.url || TARGET_URL,
+    '--json',
+    '--local',
+    '--max-steps', String(maxSteps),
+    '--max-dollars', String(maxDollars),
+  ]
+  if (goal.authorize === true) args.push('--authorize')
+
+  return new Promise((resolvePromise) => {
+    const started = performance.now()
+    let stdout = ''
+    let stderr = ''
+    let timedOut = false
+    let settled = false
+    const child = spawn(FASTBROWSE_CLI, args, {
+      cwd: FASTBROWSE_DIR,
+      env: fastbrowseEnv,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    const timer = setTimeout(() => {
+      timedOut = true
+      child.kill('SIGKILL')
+    }, MAX_CASE_MS)
+
+    const finish = (code) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      let json = null
+      let parseError = null
+      try {
+        json = JSON.parse(stdout.trim())
+      } catch (error) {
+        parseError = error.message
+      }
+      const run = {
+        goal,
+        exitCode: code,
+        timedOut,
+        durationMs: Math.round(performance.now() - started),
+        json,
+        parseError,
+        stderr: stderr.slice(-6000),
+        cached: false,
+      }
+      if (json) {
+        mkdirSync(CACHE_DIR, { recursive: true })
+        writeFileSync(cachePath(c.code), JSON.stringify({
+          json,
+          stderr: run.stderr,
+          durationMs: run.durationMs,
+          savedAt: new Date().toISOString(),
+        }, null, 2))
+      }
+      resolvePromise(run)
+    }
+
+    child.stdout.on('data', (chunk) => { stdout += chunk })
+    child.stderr.on('data', (chunk) => { stderr += chunk })
+    child.on('error', (error) => {
+      stderr += `\n${error.message}`
+      finish(127)
+    })
+    child.on('close', (code) => finish(code))
+  })
+}
+
+async function runFastbrowse(c) {
+  const goal = goalFor(c)
+
+  if (REUSE_CACHE && existsSync(cachePath(c.code))) {
+    const cached = readJson(cachePath(c.code), null)
+    if (cached?.json) {
+      return {
+        goal,
+        exitCode: 0,
+        timedOut: false,
+        durationMs: cached.durationMs ?? 0,
+        json: cached.json,
+        parseError: null,
+        stderr: cached.stderr ?? '',
+        cached: true,
+      }
+    }
+  }
+
+  let run = await runFastbrowseOnce(c, goal)
+  for (let attempt = 1; attempt <= RETRIES; attempt += 1) {
+    // Ne jamais rejouer un cas qui a produit un verdict et des preuves.
+    // Un 429 vu dans une page déjà chargée ne doit pas transformer un échec
+    // produit en plusieurs passages de plusieurs minutes.
+    const technicalFailure = run.timedOut || !run.json
+    if (!technicalFailure) break
+    const delay = RETRY_DELAY_MS * attempt
+    console.log(`  ↻ tentative ${attempt + 1}/${RETRIES + 1} dans ${Math.round(delay / 1000)} s (sortie fastbrowse incomplète)`)
+    await sleep(delay)
+    run = await runFastbrowseOnce(c, goal)
+  }
+  return run
+}
+
 async function verify(c, goal, run, probeBrowser) {
   const json = run.json
-  const findings = Array.isArray(json?.analysis?.findings) ? json.analysis.findings : []
-  const pages = Array.isArray(json?.journey?.pages) ? json.journey.pages : []
+  const agentSteps = Array.isArray(json?.steps) ? json.steps : []
+  const agentEvidence = Array.isArray(json?.evidence) ? json.evidence : []
+  const pages = pagesOf(json)
   const text = textOf(json)
-  const finalUrl = json?.finalUrl ?? pages.at(-1)?.url ?? ''
+  const finalUrl = finalUrlOf(json)
+  const agentStatus = json?.status ?? null
+  const agentProven = ['complete', 'unverified'].includes(agentStatus)
+  const agentError = cleanText(json?.error || '', 500)
   const maxContentMs = goal.perf?.maxContentMs ?? 5000
   const maxWaitMs = goal.perf?.maxWaitMs ?? 15000
-  const ironbeeUrlOk = !goal.expect?.url || new RegExp(goal.expect.url, 'i').test(finalUrl) || pages.some((p) => new RegExp(goal.expect.url, 'i').test(p.url ?? ''))
+  const consolePolicy = goal.expect?.console ?? 'warn'
+
+  const agentUrlOk = !goal.expect?.url
+    || new RegExp(goal.expect.url, 'i').test(finalUrl)
+    || pages.some((page) => new RegExp(goal.expect.url, 'i').test(page.url ?? ''))
   const textChecks = (goal.expect?.text ?? []).map((pattern) => ({
     pattern,
     ok: new RegExp(pattern, 'i').test(text),
   }))
-  const textOk = textChecks.every((x) => x.ok)
+  const textOk = textChecks.every((check) => check.ok)
   const negativeChecks = (goal.expect?.failIfText ?? []).map((pattern) => ({
     pattern,
     matched: new RegExp(pattern, 'i').test(text),
   }))
-  const ironbeeNegative = negativeChecks.find((x) => x.matched)?.pattern ?? null
-  const ironbeeFindings = findings.filter((f) => f.source === 'console' && isSeriousConsole(`${f.title ?? ''} ${f.detail ?? ''}`))
-  const seriousFindings = findings.filter((f) =>
-    ['major', 'critical'].includes(f.severity) && !isTransientFinding(f),
-  )
-  const transient = transientFindings(json)
-  const consolePolicy = goal.expect?.console ?? 'warn'
+  const agentNegative = negativeChecks.find((check) => check.matched)?.pattern ?? null
 
   const probeWanted = Boolean(goal.probeUrl) || (goal.expect?.text?.length ?? 0) > 0
   const probe = probeBrowser && probeWanted
@@ -327,9 +418,9 @@ async function verify(c, goal, run, probeBrowser) {
       })
     : { available: false, reason: 'aucune cible de sonde définie' }
 
-  const probeUrlOk = probe.available &&
-    (!goal.expect?.url || new RegExp(goal.expect.url, 'i').test(probe.url ?? ''))
-  const urlOk = ironbeeUrlOk || probeUrlOk
+  const probeUrlOk = probe.available
+    && (!goal.expect?.url || new RegExp(goal.expect.url, 'i').test(probe.url ?? ''))
+  const urlOk = agentUrlOk || probeUrlOk
   const probeTextChecks = probe.available
     ? (goal.probeText || goal.expect?.text || []).map((pattern) => ({
         pattern,
@@ -338,9 +429,11 @@ async function verify(c, goal, run, probeBrowser) {
     : []
   const probeTextOk = probe.available ? probe.matched : null
   const probeReloadOk = probe.available ? probe.reloadMatched : null
-  const contentOk = probe.available
+  const probeContentOk = probe.available
     ? probe.matched && (!goal.probeText || textOk)
-    : textOk
+    : null
+  const contentOk = probe.available ? probeContentOk : textOk
+  const evidencePass = probe.available ? contentOk : contentOk && agentProven
   const probeHttpStatus = probe.httpStatus ?? null
   const probeNavFailed = probe.available && (probe.navError || probeHttpStatus === 429 || probeHttpStatus >= 500)
   const probeContentMs = probe.contentMs ?? null
@@ -352,13 +445,17 @@ async function verify(c, goal, run, probeBrowser) {
     .map((check) => check.pattern)
   const finalMissingTexts = textChecks.filter((check) => !check.ok).map((check) => check.pattern)
   const productCount = probe.available ? productCountOf(probe.text) : productCountOf(text)
-  const ironbeeProductCount = productCountOf(text)
+  const agentProductCount = productCountOf(text)
   const articleCount = articleCountOf(text) ?? articleCountOf(probe.text)
-  const negative = probe.available ? probe.negative : ironbeeNegative
-  const consoleErrors = uniqueStrings([
-    ...(probe.available ? probe.consoleErrors : []),
-    ...ironbeeFindings.map((finding) => finding.title),
-  ]).filter(isSeriousConsole)
+  const negative = probe.available ? probe.negative : agentNegative
+  const consoleErrors = uniqueStrings(probe.available ? probe.consoleErrors : []).filter(isSeriousConsole)
+  const findings = consoleErrors.map((title) => ({
+    source: 'console',
+    severity: consolePolicy === 'fail' ? 'major' : 'minor',
+    title,
+    detail: '',
+  }))
+  const transient = transientOf(run)
   const excerpt = pageExcerpt(probe.text || text)
 
   let status = 'blocked'
@@ -388,22 +485,22 @@ async function verify(c, goal, run, probeBrowser) {
     status = 'failed'
     reason = 'slow-content'
   } else if (!urlOk) {
-    if (json?.status === 'done') {
+    if (agentProven) {
       status = 'failed'
       reason = 'expectation-mismatch'
     } else {
       status = 'blocked'
       reason = 'inconclusive'
     }
-  } else if (contentOk) {
+  } else if (evidencePass) {
     if (consolePolicy === 'fail' && consoleErrors.length) {
       status = 'failed'
       reason = 'console-error'
     } else {
       status = 'passed'
-      reason = json?.status === 'done' ? 'goal-and-evidence' : 'evidence-overrides-ironbee'
+      reason = agentStatus === 'complete' ? 'goal-and-evidence' : 'evidence-overrides-fastbrowse'
     }
-  } else if (json?.status === 'done') {
+  } else if (agentProven) {
     status = 'failed'
     reason = 'expectation-mismatch'
   } else if (transient.length) {
@@ -414,19 +511,11 @@ async function verify(c, goal, run, probeBrowser) {
     reason = 'inconclusive'
   }
 
-  if (seriousFindings.length && status === 'passed') {
-    status = 'failed'
-    reason = 'serious-finding'
-  }
-
   const label = goal.label || 'le comportement attendu'
   let actual = ''
   if (status === 'passed') {
     if (!probe.available) {
-      const observedLabel = productCount != null
-        ? `${productCount} produit${productCount > 1 ? 's' : ''} trouvé${productCount > 1 ? 's' : ''}`
-        : (goal.expect?.text?.length ? 'les textes attendus sont présents' : 'le parcours est terminé')
-      actual = `Vérifié par IronBee : ${label}. ${observedLabel}. Mesure de performance indisponible pour ce cas.`
+      actual = `Vérifié par fastbrowse : ${label}. Statut fastbrowse : ${agentStatus || 'inconnu'}. URL finale : ${finalUrl || 'inconnue'}.`
     } else {
       let observedLabel = 'des produits avec prix'
       if (articleCount != null) {
@@ -450,29 +539,29 @@ async function verify(c, goal, run, probeBrowser) {
     actual = `Le contenu attendu (${label}) est bien là (${seen}), mais il s'affiche ${which} après ${formatMs(ms)}, au-delà du seuil de ${formatMs(maxContentMs)}. C'est trop lent pour un client. Extrait : « ${excerpt} ».`
   } else if (reason === 'negative-evidence') {
     const count = productCount != null ? `${productCount} produit${productCount > 1 ? 's' : ''}` : 'aucun produit'
-    const instability = ironbeeProductCount != null && ironbeeProductCount !== productCount
-      ? ` L'affichage est instable : ${count} maintenant, ${ironbeeProductCount} produit${ironbeeProductCount > 1 ? 's' : ''} pendant le parcours IronBee.`
+    const instability = agentProductCount != null && agentProductCount !== productCount
+      ? ` L'affichage est instable : ${count} maintenant, ${agentProductCount} produit${agentProductCount > 1 ? 's' : ''} pendant le parcours fastbrowse.`
       : ''
     actual = `La page affiche ${count} / « ${negative} » au lieu de ${label}.${instability} Extrait : « ${excerpt} ».`
   } else if (reason === 'content-missing') {
-    actual = `Le contenu attendu (${label}) n'apparaît pas après ${formatMs(maxWaitMs)}. Textes absents : ${missingTexts.map((p) => `« ${p} »`).join(', ')}. La page affiche : « ${excerpt} ».`
+    actual = `Le contenu attendu (${label}) n'apparaît pas après ${formatMs(maxWaitMs)}. Textes absents : ${missingTexts.map((pattern) => `« ${pattern} »`).join(', ')}. La page affiche : « ${excerpt} ».`
   } else if (reason === 'reload-missing') {
     actual = `Le contenu était visible au premier chargement, mais il n'apparaît plus après rechargement (${formatMs(probeReloadContentMs ?? maxWaitMs)}). Extrait : « ${excerpt} ».`
   } else if (reason === 'console-error') {
     actual = `Le contenu attendu (${label}) est affiché en ${formatMs(probeContentMs)}, mais la console contient une erreur : « ${shortConsole(consoleErrors[0])} ».`
   } else if (reason === 'network') {
     const detail = probe.navError || `HTTP ${probeHttpStatus ?? 'inconnu'}`
-    actual = `Impossible de charger ${goal.probeUrl || finalUrl} : ${detail}. ${transient.length ? `IronBee a aussi vu : ${transient.map((f) => f.title).join(' | ').slice(0, 300)}.` : ''}`
+    const agentDetail = agentError ? ` fastbrowse : ${agentError}.` : ''
+    actual = `Impossible de charger ${goal.probeUrl || finalUrl} : ${detail}.${agentDetail}${transient.length ? ` Fournisseur : ${transient[0].title}.` : ''}`
   } else if (reason === 'expectation-mismatch') {
-    actual = `Le parcours n'a pas produit le résultat attendu (${label}). URL finale : ${finalUrl || 'aucune'}. Textes absents du parcours : ${finalMissingTexts.map((p) => `« ${p} »`).join(', ') || 'aucun'}. Extrait : « ${excerpt} ».`
+    actual = `Le parcours fastbrowse n'a pas produit le résultat attendu (${label}). URL finale : ${finalUrl || 'aucune'}. Textes absents du parcours : ${finalMissingTexts.map((pattern) => `« ${pattern} »`).join(', ') || 'aucun'}. Extrait : « ${excerpt} ».`
   } else if (reason === 'timeout') {
-    actual = `IronBee n'a pas terminé dans le délai imparti. Dernière URL : ${finalUrl || 'aucune'}.`
+    actual = `fastbrowse n'a pas terminé dans le délai imparti. Dernière URL : ${finalUrl || 'aucune'}.`
   } else if (reason === 'no-json' || reason.startsWith('invalid-json')) {
-    actual = `IronBee n'a pas renvoyé de résultat exploitable${run.parseError ? ` : ${cleanText(run.parseError, 240)}` : ''}.`
-  } else if (reason === 'serious-finding') {
-    actual = `Le contenu est visible, mais IronBee a relevé un problème sérieux : ${seriousFindings.map((f) => f.title).join(' | ').slice(0, 400)}.`
+    actual = `fastbrowse n'a pas renvoyé de résultat exploitable${run.parseError ? ` : ${cleanText(run.parseError, 240)}` : ''}.`
   } else {
-    actual = `Preuve insuffisante : ${label}. URL finale : ${finalUrl || 'aucune'}. Extrait : « ${excerpt} ».`
+    const agentDetail = agentError ? ` Détail fastbrowse : ${agentError}.` : ''
+    actual = `Preuve insuffisante : ${label}. Statut fastbrowse : ${agentStatus || 'inconnu'}. URL finale : ${finalUrl || 'aucune'}.${agentDetail} Extrait : « ${excerpt} ».`
   }
 
   return {
@@ -487,14 +576,14 @@ async function verify(c, goal, run, probeBrowser) {
     negativeChecks,
     hasNegativeEvidence: Boolean(negative),
     consoleErrors,
-    seriousFindings,
+    seriousFindings: [],
     transient,
     findings,
     pages,
     finalUrl,
     probe,
     productCount,
-    ironbeeProductCount,
+    agentProductCount,
     articleCount,
     contentMs: probeContentMs,
     reloadContentMs: probeReloadContentMs,
@@ -509,14 +598,18 @@ async function verify(c, goal, run, probeBrowser) {
 }
 
 function compactEvidence(c, goal, run, verdict) {
+  const json = run.json
+  const lines = json?.cost?.lines ?? []
+  const cost = lines.reduce((sum, line) => sum + (typeof line?.dollars === 'number' ? line.dollars : 0), 0)
+  const unknownCost = lines.some((line) => line?.dollars == null)
   return {
-    engine: 'ironbee',
-    ironbee_status: run.json?.status ?? null,
-    ironbee_reason: run.json?.reason ?? null,
-    ironbee_verdict: run.json?.analysis?.verdict ?? null,
-    ironbee_summary: run.json?.analysis?.summary ?? null,
-    actions: run.json?.actions ?? run.json?.steps?.length ?? 0,
-    decisions: run.json?.decisions ?? null,
+    engine: 'fastbrowse',
+    fastbrowse_status: json?.status ?? null,
+    fastbrowse_error: json?.error ?? null,
+    fastbrowse_answer: json?.answer ? cleanText(json.answer, 1200) : null,
+    fastbrowse_cost_dollars: cost || null,
+    fastbrowse_cost_unknown: unknownCost,
+    actions: Array.isArray(json?.steps) ? json.steps.length : 0,
     elapsed_ms: run.durationMs,
     final_url: verdict.finalUrl || null,
     expectations: goal.expect ?? {},
@@ -538,31 +631,36 @@ function compactEvidence(c, goal, run, verdict) {
       reload_matched: verdict.probe.reloadMatched ?? null,
       negative: verdict.probe.negative ?? null,
       product_count: verdict.productCount,
-      ironbee_product_count: verdict.ironbeeProductCount,
+      fastbrowse_product_count: verdict.agentProductCount,
       article_count: verdict.articleCount,
       excerpt: verdict.excerpt,
       console_errors: verdict.probe.consoleErrors ?? [],
       nav_error: verdict.probe.navError ?? null,
     } : null,
-    network_findings: verdict.transient?.map((f) => ({ title: f.title, detail: f.detail })) ?? [],
+    network_findings: verdict.transient?.map((finding) => ({ title: finding.title, detail: finding.detail })) ?? [],
     cached: run.cached === true,
-    findings: verdict.findings.slice(0, 8).map((f) => ({
-      source: f.source,
-      severity: f.severity,
-      title: f.title,
-      detail: f.detail,
+    findings: verdict.findings.slice(0, 8).map((finding) => ({
+      source: finding.source,
+      severity: finding.severity,
+      title: finding.title,
+      detail: finding.detail,
     })),
-    pages: verdict.pages.slice(-3).map((p) => ({
-      url: p.url,
-      title: p.title,
-      excerpt: String(p.excerpt ?? '').slice(0, 2500),
+    pages: verdict.pages.slice(-3).map((page) => ({
+      url: page.url,
+      title: page.title,
+      excerpt: String(page.excerpt ?? '').slice(0, 2500),
     })),
-    ironbee_steps: (run.json?.steps ?? []).slice(-12).map((s) => ({
-      operation: s.operation,
-      target: s.targetLabel ?? s.target ?? null,
-      text: s.text ?? null,
-      url: s.url ?? null,
-      goal: s.goal ?? null,
+    fastbrowse_steps: (json?.steps ?? []).slice(-12).map((step) => ({
+      operation: step.operation,
+      target: step.target ?? null,
+      outcome: step.outcome ?? null,
+      decided_by: step.decided_by ?? null,
+      note: step.note ?? null,
+      url: step.url ?? null,
+    })),
+    evidence_quotes: (json?.evidence ?? []).slice(-8).map((evidence) => ({
+      url: evidence.url,
+      quote: String(evidence.quote ?? '').slice(0, 1000),
     })),
     stderr: run.stderr ? run.stderr.slice(-1200) : undefined,
   }
@@ -574,12 +672,12 @@ function stepResults(c, status, verdict, run, goal) {
   const probe = verdict.probe?.available ? verdict.probe : null
   const openActual = probe
     ? `Page ouverte : ${probe.url || 'URL inconnue'}${probe.httpStatus != null ? ` (HTTP ${probe.httpStatus})` : ''}. ${verdict.contentMs != null ? `Contenu affiché en ${formatMs(verdict.contentMs)}.` : 'Le contenu attendu ne s’est pas affiché dans le délai.'}`
-    : `Page ouverte par IronBee. URL finale : ${verdict.finalUrl || 'inconnue'}.`
+    : `Page ouverte par fastbrowse. URL finale : ${verdict.finalUrl || 'inconnue'}.`
   const reloadActual = verdict.reloadContentMs != null
     ? `Après rechargement, le contenu attendu est toujours affiché en ${formatMs(verdict.reloadContentMs)} (seuil ${formatMs(verdict.maxContentMs)}).`
     : 'Contrôle final effectué sur la page déjà chargée.'
 
-  return steps.map((s, i) => {
+  return steps.map((step, i) => {
     let stepStatus = 'passed'
     let actual = ''
     if (status === 'passed') {
@@ -608,10 +706,10 @@ function stepResults(c, status, verdict, run, goal) {
       actual = 'Non exécutée.'
     }
     return {
-      n: s.n,
-      code: `${c.code}-${s.n}`,
-      action: s.action,
-      expected: s.expected,
+      n: step.n,
+      code: `${c.code}-${step.n}`,
+      action: step.action,
+      expected: step.expected,
       actual: String(actual).slice(0, 2000),
       status: stepStatus,
       evidence,
@@ -621,7 +719,7 @@ function stepResults(c, status, verdict, run, goal) {
 
 const startedAt = new Date()
 const results = []
-const probeBrowser = await openProbe(IRONBEE_DIR)
+const probeBrowser = await openProbe(FASTBROWSE_DIR)
 if (probeBrowser.available) {
   console.log(`\n🔎 Sonde de page prête (${probeBrowser.executablePath})`)
 } else {
@@ -630,15 +728,15 @@ if (probeBrowser.available) {
 
 try {
   for (const [index, c] of cases.entries()) {
-    const goal = goals[c.code] ?? defaultGoal(c)
+    const goal = goalFor(c)
     console.log(`\n▶ ${c.code} — ${c.title}`)
     if (index > 0 && CASE_DELAY_MS > 0 && !REUSE_CACHE) {
       console.log(`  … pause ${Math.round(CASE_DELAY_MS / 1000)} s entre les cas`)
       await sleep(CASE_DELAY_MS)
     }
-    const run = await runIronBee(c)
+    const run = await runFastbrowse(c)
     const verdict = await verify(c, goal, run, probeBrowser)
-    console.log(`  ${verdict.status.toUpperCase()} (${verdict.reason}) · ${run.durationMs} ms · ${run.json?.actions ?? '?'} actions`)
+    console.log(`  ${verdict.status.toUpperCase()} (${verdict.reason}) · ${run.durationMs} ms · ${run.json?.steps?.length ?? '?'} étapes`)
     console.log(`  ${verdict.actual.slice(0, 700)}`)
     results.push({
       code: c.code,
@@ -659,14 +757,14 @@ try {
 }
 
 const counts = { passed: 0, failed: 0, blocked: 0, skipped: 0 }
-for (const r of results) counts[r.status] = (counts[r.status] ?? 0) + 1
+for (const result of results) counts[result.status] = (counts[result.status] ?? 0) + 1
 const payload = {
   run_id: env('QA_RUN_ID') || null,
-  model: env('IRONBEE_REPORT_MODEL', 'openrouter/jev-latest'),
-  executor: 'ironbee',
+  model: env('FASTBROWSE_REPORT_MODEL', 'opencode/deepseek-v4.1-flash+jev-1.13'),
+  executor: 'fastbrowse',
   started_at: startedAt.toISOString(),
   finished_at: new Date().toISOString(),
-  duration_ms: results.reduce((sum, r) => sum + r.duration_ms, 0),
+  duration_ms: results.reduce((sum, result) => sum + result.duration_ms, 0),
   cases: results,
   summary: counts,
 }

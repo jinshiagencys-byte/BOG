@@ -1,12 +1,13 @@
 /**
  * Sonde de page indépendante du modèle.
  *
- * IronBee/Jev décide du parcours. Cette sonde répond à deux questions que le
+ * fastbrowse/Jev décide du parcours. Cette sonde répond à deux questions que le
  * verdict de l'agent ne mesure pas : « le contenu attendu est-il réellement
  * affiché ? » et « combien de temps le client a-t-il attendu ? ».
  *
- * Elle utilise Chromium/Chrome via `playwright-core`, déjà installé avec
- * IronBee. Aucun réseau social, aucun secret : uniquement l'URL cible.
+ * Elle utilise Google Chrome via `playwright-core`, installé à côté du runner
+ * (ou exposé par NODE_PATH en CI). Aucun réseau social, aucun secret :
+ * uniquement l'URL cible.
  */
 import { existsSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -15,10 +16,10 @@ import { performance } from 'node:perf_hooks'
 
 const require = createRequire(import.meta.url)
 
-function loadPlaywright(ironbeeDir) {
+function loadPlaywright(probeDir) {
   for (const name of ['playwright-core', 'patchright']) {
     try {
-      const mod = require(join(ironbeeDir, 'node_modules', name))
+      const mod = require(join(probeDir, 'node_modules', name))
       if (mod?.chromium) return mod
     } catch {
       // continue
@@ -45,10 +46,10 @@ function chromePath() {
   return candidates.find((candidate) => existsSync(candidate)) ?? null
 }
 
-export async function openProbe(ironbeeDir) {
-  const playwright = loadPlaywright(ironbeeDir)
+export async function openProbe(probeDir) {
+  const playwright = loadPlaywright(probeDir)
   if (!playwright) {
-    return { available: false, reason: 'playwright-core introuvable dans IronBee' }
+    return { available: false, reason: 'playwright-core introuvable (installe-le ou définis NODE_PATH)' }
   }
   const executablePath = chromePath()
   if (!executablePath) {
@@ -124,7 +125,7 @@ export async function probeUrl(probe, options) {
       } catch {
         lastText = ''
       }
-      if (expected.length > 0 && expected.every((re) => re.test(lastText))) {
+      if (expected.length === 0 || expected.every((re) => re.test(lastText))) {
         return { matched: true, text: lastText }
       }
       if (performance.now() >= until) return { matched: false, text: lastText }

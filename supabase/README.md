@@ -77,30 +77,39 @@ node supabase/scripts/generate-case-templates.mjs
 Le script lit `app/src/data/casePacks.js` et réécrit
 `20261022120100_v2_02_case_templates.sql`. Ne pas éditer ce fichier à la main.
 
-## Exécution des runs — IronBee (principal)
+## Exécution des runs — fastbrowse (principal)
 
-Le chemin par défaut est **IronBee Express** (`@ironbee-ai/express`) avec **Jev** via
-OpenRouter. `start-run` déclenche `.github/workflows/ironbee-qa.yml` ; le workflow clone et
-compile IronBee, installe Google Chrome, récupère le manifeste puis exécute
-`.github/qa/ironbee-runner.mjs`.
+Le chemin par défaut est **fastbrowse** en CLI avec le Chrome du runner. `start-run`
+déclenche `.github/workflows/fastbrowse-qa.yml` ; le workflow installe Chrome, clone le
+commit fastbrowse épinglé (`e46c12a14e5cf5034e69eb7d5a21856eb0f0dc27`), récupère le
+manifeste puis exécute `.github/qa/fastbrowse-runner.mjs`.
 
 Le runner ne fait pas confiance au verdict de l'agent : il possède les assertions. Un cas
-n'est `passed` que si l'URL finale, les textes attendus et la politique console sont
-conformes. Une preuve de page peut donc valider un cas même si IronBee termine `blocked`
-(par exemple quand Jev boucle sur « la page liste-t-elle des produits ? »). Inversement,
-`Aucun produit trouvé` ou `0 produits trouvés` produit un `failed`, pas un `blocked`.
+n'est `passed` que si l'URL finale, les textes attendus, le délai d'affichage et la
+politique console sont conformes. Une preuve de page peut donc valider un cas même si
+fastbrowse termine `blocked` (par exemple quand Jev boucle sur « la page liste-t-elle des
+produits ? »). Inversement, `Aucun produit trouvé` ou `0 produits trouvés` produit un
+`failed`, pas un `blocked`.
 
-- Modèle : `openrouter/jev-latest` via `https://openrouter.ai/api/v1/systemone`.
-- `OPENROUTER_API_KEY` est lue depuis le secret GitHub `OPENROUTER_API_KEY` s'il existe.
-  Sinon, le workflow appelle `qa-credentials` avec `x-run-token` ; la clé reste côté
-  Supabase et n'atteint jamais le navigateur.
-- Les cas cartographiés sont dans `.github/qa/ironbee-cases.json`. Les cas non cartographiés
+- LLM : `deepseek-v4.1-flash` via `https://opencode.ai/inference/openai/v1`.
+- Jev : `jev-1.13` via `https://opencode.ai/inference/systemone`.
+- Une seule clé : le secret GitHub `OPENCODE_API_KEY`, recopiée dans
+  `TYPESAFE_API_KEY` et `FASTBROWSE_LLM_API_KEY` par le workflow. Aucun repli vers
+  OpenRouter, Vercel AI Gateway ou Browser Use Cloud.
+- Les cas cartographiés sont dans `.github/qa/fastbrowse-cases.json` (objectifs, textes
+  attendus, `probeUrl`, seuils `maxContentMs`/`maxWaitMs`). Les cas non cartographiés
   utilisent un objectif générique construit depuis leur titre et leurs étapes.
+- La sonde `.github/qa/page-probe.mjs` ouvre la page en parallèle avec Playwright/Chrome,
+  mesure le temps d'affichage, recharge la page et relève la console. Elle reste
+  indépendante du modèle.
 - Les erreurs réseau (`429`, `ECONNRESET`, timeouts) donnent `blocked` avec un retry
-  borné ; elles ne sont pas maquillées en échec produit.
+  borné uniquement quand fastbrowse n'a produit ni JSON ni verdict ; un `429` dans une
+  page déjà chargée n'est jamais rejoué. Ces erreurs ne sont pas maquillées en échec
+  produit.
 
 Antigravity reste disponible en fallback explicite (`executor: "antigravity"` dans
-`start-run`) et conserve le workflow `.github/workflows/antigravity-qa.yml`.
+`start-run`) et conserve le workflow `.github/workflows/antigravity-qa.yml`. IronBee n'est
+plus déclenché.
 
 ## Exécution des runs — agent Antigravity (fallback)
 
@@ -142,13 +151,13 @@ Chaîne complète :
 2. `start-run` appelle `create_run_manifest` en `service_role` : le manifeste contient les
    cas, leurs étapes numérotées (`n`), le plan, l'URL cible et un jeton éphémère.
 3. `start-run` obtient un token d'installation GitHub App et déclenche le workflow
-   `ironbee-qa.yml` (ou `antigravity-qa.yml` si `executor: "antigravity"`) avec `run_id`,
-   `manifest_url` et `run_token`.
-4. Le workflow récupère le manifeste, construit la section « PLAN DE TEST » du prompt à
-   partir des cas, puis lance l'agent.
-5. L'agent écrit `qa_result.json` : par cas, `status`, `severity`, `steps[].n`,
-   `steps[].actual`, `steps[].evidence` (`url`, `http_status`, `console`, `network`,
-   `screenshot`) ; au niveau global, `side_effects`.
+   `fastbrowse-qa.yml` (ou `antigravity-qa.yml` si `executor: "antigravity"`) avec
+   `run_id`, `manifest_url` et `run_token`.
+4. Le workflow récupère le manifeste, construit un objectif par cas, lance fastbrowse en
+   CLI, puis passe la page à la sonde Playwright indépendante.
+5. fastbrowse et la sonde alimentent `qa_result.json` : par cas, `status`, `severity`,
+   `steps[].n`, `steps[].actual`, `steps[].evidence` (`url`, `http_status`, `console`,
+   `content_ms`, `product_count`, …) ; au niveau global, `side_effects`.
 6. Le workflow normalise le rapport et l'envoie à `report-run` avec `x-run-token`.
 7. `report-run` appelle `report_run` : résultats de cas et d'étapes, compteurs, preuves,
    `model`, `side_effects` et rapport brut sont enregistrés.
@@ -169,37 +178,36 @@ Fichiers déployés avec `supabase functions deploy` :
 
 - `supabase/functions/start-run/index.ts` : vérifie le JWT utilisateur, charge
   `github_integrations`, appelle `create_run_manifest` avec le `service_role`, obtient un
-  token d'installation GitHub App, déclenche `ironbee-qa.yml` par défaut, puis ne renvoie
-  que `runId` au navigateur. Le jeton de run n'est jamais renvoyé au client.
+  token d'installation GitHub App, déclenche `fastbrowse-qa.yml` par défaut, puis ne
+  renvoie que `runId` au navigateur. Le jeton de run n'est jamais renvoyé au client.
 - `supabase/functions/report-run/index.ts` : reçoit `x-run-token`, normalise
   `qa_result.json` (`test_cases` → `cases`, `id` → `code`, `n` conservé), respecte
-  l'`executor` déclaré (`ironbee` ou `antigravity`) et appelle `report_run` avec le
+  l'`executor` déclaré (`fastbrowse` ou `antigravity`) et appelle `report_run` avec le
   `service_role`.
 - `supabase/functions/qa-credentials/index.ts` : remet la clé OpenRouter au workflow QA
-  porteur d'un `x-run-token` valide, non expiré et lié au bon run. Jamais appelée par le
-  navigateur.
+  porteur d'un `x-run-token` valide. Conservée pour l'ancien chemin IronBee, elle n'est
+  plus appelée par `fastbrowse-qa.yml`.
 - `supabase/functions/run-manifest/index.ts` : sert le manifeste figé au workflow,
   authentifié par `x-run-token`.
 
-Le workflow principal est `.github/workflows/ironbee-qa.yml` avec le runner
-`.github/qa/ironbee-runner.mjs` et les objectifs `.github/qa/ironbee-cases.json`.
+Le workflow principal est `.github/workflows/fastbrowse-qa.yml` avec le runner
+`.github/qa/fastbrowse-runner.mjs`, les objectifs `.github/qa/fastbrowse-cases.json` et la
+sonde `.github/qa/page-probe.mjs`.
 Le fallback Antigravity utilise `.github/workflows/antigravity-qa.yml` et
 `.github/qa/prompt.md` (le plan est injecté depuis le manifeste).
 
 Secrets Edge configurés : `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`,
-`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (fournis par Supabase), `OPENROUTER_API_KEY`
-(pour IronBee), et `ANTIGRAVITY_MODEL` (modèle OpenCode par défaut : `big-pickle`,
+`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (fournis par Supabase), et
+`ANTIGRAVITY_MODEL` (modèle OpenCode par défaut : `big-pickle`,
 `deepseek-v4.1-flash-free` ou `beam-free`) pour le fallback. `OPENCODE_MODEL` reste
 accepté comme alias. Le `installation_id` est stocké par organisation dans
 `github_integrations` ; aucune clé privée ni token GitHub n'est en base.
 `github_integrations.workflow_file` reste `antigravity-qa.yml` pour le fallback ;
-`start-run` force `ironbee-qa.yml` par défaut.
+`start-run` force `fastbrowse-qa.yml` par défaut.
 
-Côté GitHub Actions, `OPENCODE_API_KEY` est optionnelle pour le fallback Antigravity :
-sans elle, les modèles gratuits utilisent le credential public du client OpenCode à travers
-le proxy local ; avec elle, le quota est celui du compte associé. Pour IronBee, le secret
-GitHub `OPENROUTER_API_KEY` est optionnel : s'il est absent, le workflow le récupère via
-`qa-credentials` et `x-run-token`. `GEMINI_API_KEY` n'est plus utilisé. Le secret
+Côté GitHub Actions, le secret `OPENCODE_API_KEY` est **obligatoire** pour fastbrowse :
+le workflow s'arrête avec un message explicite s'il manque. Il alimente le LLM et Jev, et
+le même secret sert de credential optionnel au fallback Antigravity. Le secret
 `GITHUB_TOKEN` fourni par Actions n'est pas utilisé pour déclencher le workflow :
 `start-run` passe par la GitHub App.
 
