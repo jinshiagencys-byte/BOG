@@ -140,7 +140,7 @@ export default function Header({ onToggleSidebar }) {
         onClick={() => setPaletteOpen(true)}
       >
         <Icon name="search" className="td-ic-14" />
-        <span>Rechercher dans TestDino...</span>
+        <span>Rechercher dans BOG...</span>
         <span className="td-kbd">Ctrl K</span>
       </button>
 

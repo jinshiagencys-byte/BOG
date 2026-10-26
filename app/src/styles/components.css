@@ -1,5 +1,5 @@
 /* ============================================================
-   TestDino-like — composants (CSS pur, tokens de index.css)
+   BOG — composants (CSS pur, tokens de index.css)
    Repris du clone HTML validé par computed styles.
    ============================================================ */
 
@@ -2618,7 +2618,7 @@ select.td-control {
   stroke: transparent;
 }
 
-/* ---------- dialogue « TestDino Changelog » (cloche du header) ----------
+/* ---------- dialogue « BOG Changelog » (cloche du header) ----------
    Réplique du dialogue de prod : overlay noir 80 %, boîte centrée
    `max-w-2xl` / `max-h-85vh`, en-tête + filtres, corps défilant (min 300 px),
    pied avec le lien vers le changelog complet. */
@@ -3062,14 +3062,11 @@ select.td-control {
 .td-auth-oauth:hover {
   background: hsl(var(--accent));
 }
-.td-auth-google,
-.td-auth-sso {
+.td-auth-google {
+  display: block;
   width: 1.125rem;
   height: 1.125rem;
   flex-shrink: 0;
-}
-.td-auth-google {
-  display: block;
 }
 
 .td-auth-or {

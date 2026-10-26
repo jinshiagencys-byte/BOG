@@ -14,7 +14,7 @@ export const DEMO_PROJECT = {
   name: 'Demo Project',
   category: 'Application web',
   description:
-    "Sample Playwright project to explore TestDino's reporting and observability features.",
+    "Sample Playwright project to explore BOG's reporting and observability features.",
   // « Created 5 August 2026 » sur le vrai site.
   createdAt: '2026-08-05T12:00:00.000Z',
 }

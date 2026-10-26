@@ -42,7 +42,7 @@ function PaletteInner({ onClose }) {
         <input
           autoFocus
           type="text"
-          placeholder="Rechercher dans TestDino..."
+          placeholder="Rechercher dans BOG..."
           autoComplete="off"
           value={q}
           onChange={(e) => setQ(e.target.value)}

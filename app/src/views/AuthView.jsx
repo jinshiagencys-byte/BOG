@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
+import BrandLogo from '../components/BrandLogo.jsx'
 import Icon from '../components/Icon.jsx'
 import { useAuth } from '../app/auth-context.js'
 import { DEMO_PROJECT_SLUG } from '../app/projects.js'
@@ -134,13 +135,9 @@ export default function AuthView({ mode = 'signin' }) {
     }
   }
 
-  const oauth = async (provider) => {
+  const googleSignIn = async () => {
     setError('')
     setNotice('')
-    if (provider !== 'Google') {
-      setNotice(`${provider} sign-in is not configured on this deployment.`)
-      return
-    }
     setSubmitting(true)
     try {
       await signInWithGoogle()
@@ -171,36 +168,24 @@ export default function AuthView({ mode = 'signin' }) {
   return (
     <main className="td-auth">
       <Link to="/auth" className="td-auth-brand">
-        <Icon name="bird" className="td-auth-logo" />
-        <span>TestDino</span>
+        <BrandLogo className="td-auth-logo" />
+        <span>BOG</span>
       </Link>
 
       <section className="td-auth-panel">
         <h1 className="td-auth-title">
-          {isSignup ? 'Create your account' : 'Sign in to TestDino'}
+          {isSignup ? 'Create your account' : 'Sign in to BOG'}
         </h1>
 
         <button
           type="button"
           className="td-auth-oauth"
-          onClick={() => oauth('Google')}
+          onClick={googleSignIn}
           disabled={submitting}
         >
           <GoogleMark />
           <span>Continue with Google</span>
         </button>
-
-        {!isSignup ? (
-          <button
-            type="button"
-            className="td-auth-oauth"
-            onClick={() => oauth('SSO')}
-            disabled={submitting}
-          >
-            <Icon name="building-2" className="td-auth-sso" />
-            <span>Continue with SSO</span>
-          </button>
-        ) : null}
 
         <div className="td-auth-or" role="separator">
           <span>OR</span>

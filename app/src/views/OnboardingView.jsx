@@ -6,7 +6,7 @@
 // organisation du clone), qui invite à créer un premier projet.
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import Icon from '../components/Icon.jsx'
+import BrandLogo from '../components/BrandLogo.jsx'
 import { useApp } from '../app/app-context.js'
 import { useAuth } from '../app/auth-context.js'
 import { createOrganization, messageForError } from '../lib/api.js'
@@ -55,8 +55,8 @@ export default function OnboardingView() {
   return (
     <main className="td-onb">
       <div className="td-onb-brand">
-        <Icon name="bird" className="td-onb-logo" />
-        <span>TestDino</span>
+        <BrandLogo className="td-onb-logo" />
+        <span>BOG</span>
       </div>
 
       <form className="td-onb-card" onSubmit={submit} noValidate>

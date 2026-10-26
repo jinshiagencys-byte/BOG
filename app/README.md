@@ -1,6 +1,6 @@
-# TestDino-like — application React
+# BOG — application React
 
-Clone fonctionnel de l’interface TestDino, branché sur Supabase pour l’authentification,
+Application QA BOG, branchée sur Supabase pour l’authentification,
 les organisations, les projets, les cas de test et les exécutions. L’interface produit est
 en français ; les écrans d’authentification sont en anglais.
 

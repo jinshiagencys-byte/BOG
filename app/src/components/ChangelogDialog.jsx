@@ -1,7 +1,7 @@
-// Dialogue « TestDino Changelog » : ce qu'ouvre la cloche du header.
+// Dialogue « BOG Changelog » : ce qu'ouvre la cloche du header.
 //
 // Réplique du dialogue du vrai site (Radix Dialog + Accordion) :
-// en-tête « Nouveautés TestDino » + filtres produit,
+// en-tête « Nouveautés BOG » + filtres produit,
 // liste dépliable des entrées (la plus récente est ouverte par défaut) et pied
 // avec le lien vers le changelog complet.
 import { useEffect, useRef, useState } from 'react'
@@ -40,7 +40,7 @@ export default function ChangelogDialog({ onClose }) {
 
       <div className="td-changelog-box" tabIndex={-1} ref={boxRef}>
         <div className="td-changelog-head">
-          <h2 id="td-changelog-title">Nouveautés TestDino</h2>
+          <h2 id="td-changelog-title">Nouveautés BOG</h2>
           <div className="td-changelog-filters" data-testid="changelog-product-filter">
             {CHANGELOG_FILTERS.map((f) => (
               <button

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import Icon from '../components/Icon.jsx'
+import BrandLogo from '../components/BrandLogo.jsx'
 import { useAuth } from '../app/auth-context.js'
 import { supabase } from '../lib/supabase.js'
 
@@ -39,8 +39,8 @@ export default function ResetPasswordView() {
   return (
     <main className="td-auth">
       <Link to="/auth" className="td-auth-brand">
-        <Icon name="bird" className="td-auth-logo" />
-        <span>TestDino</span>
+        <BrandLogo className="td-auth-logo" />
+        <span>BOG</span>
       </Link>
 
       <section className="td-auth-panel">
