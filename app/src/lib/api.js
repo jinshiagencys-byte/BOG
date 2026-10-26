@@ -34,6 +34,11 @@ const ERROR_MESSAGES = {
   INVITE_EMAIL_INVALID: 'Saisissez une adresse email valide.',
   INVITE_SELF: 'Vous êtes déjà membre de cette organisation.',
   INVITE_NOT_FOUND: 'Invitation introuvable ou déjà utilisée.',
+  INVITE_FIELDS_REQUIRED: "L'organisation et l'email sont requis.",
+  EMAIL_RATE_LIMITED:
+    'L’invitation est enregistrée, mais Supabase limite temporairement l’envoi d’emails. Réessayez plus tard.',
+  INVITE_EMAIL_FAILED:
+    'L’invitation est enregistrée, mais l’email n’a pas pu être envoyé.',
   PROJECT_NAME_REQUIRED: 'Le nom du projet est requis.',
   CLIENT_NAME_REQUIRED: 'Le nom du client est requis.',
   PROJECT_URL_INVALID: "L'URL doit commencer par http:// ou https://.",
@@ -122,7 +127,7 @@ export async function signInWithOAuth(provider) {
 export async function listMemberships(userId) {
   const { data, error } = await supabase
     .from('organization_members')
-    .select('org_id, role, created_at, organizations(id,name,slug,plan,is_demo,created_at)')
+    .select('org_id, role, created_at, organizations(id,name,slug,plan,is_demo,created_at,created_by)')
     .eq('user_id', userId)
     .order('created_at', { ascending: true })
 
@@ -155,6 +160,15 @@ export async function listOrganizationTeam(orgId) {
   return Array.isArray(data) ? data : []
 }
 
+export async function setMyOrganizationRole(orgId, role) {
+  const { data, error } = await supabase.rpc('set_my_organization_role', {
+    p_org_id: orgId,
+    p_role: role,
+  })
+  if (error) throw toApiError(error)
+  return data
+}
+
 export async function inviteOrganizationMember(orgId, email, role = 'member') {
   const { data, error } = await supabase.rpc('invite_organization_member', {
     p_org_id: orgId,
@@ -162,6 +176,38 @@ export async function inviteOrganizationMember(orgId, email, role = 'member') {
     p_role: role,
   })
   if (error) throw toApiError(error)
+  return data
+}
+
+/**
+ * Envoie l'email d'invitation après l'enregistrement de l'invitation.
+ *
+ * L'adhésion n'est volontairement pas créée ici : elle le sera par
+ * `accept_my_invitations()` à la première authentification de la personne.
+ */
+export async function sendOrganizationInviteEmail(orgId, email) {
+  const { data, error } = await supabase.functions.invoke('send-invite-email', {
+    body: {
+      orgId,
+      email: String(email || '').trim(),
+      redirectTo: `${window.location.origin}/auth/callback`,
+    },
+  })
+
+  if (error) {
+    let payload = null
+    try {
+      payload = await error.context?.json?.()
+    } catch {
+      /* réponse non JSON */
+    }
+    throw new ApiError(
+      payload?.detail || payload?.error || error.message || 'INVITE_EMAIL_FAILED',
+      payload?.error || 'INVITE_EMAIL_FAILED',
+      error,
+    )
+  }
+
   return data
 }
 

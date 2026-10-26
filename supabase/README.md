@@ -2,12 +2,12 @@
 
 ## État
 
-Les 8 migrations sont **appliquées** à la base `Monitoring Project`
+Les 9 migrations sont **appliquées** à la base `Monitoring Project`
 (`ipnepkenbozwoslrhtcj`) : 228 modèles de cas / 684 étapes, 46 policies RLS, 7 sites
 historiques conservés et aucun slug `demoproject`. Les Edge Functions `start-run`,
-`run-manifest` et `report-run` sont déployées ; les secrets `GITHUB_APP_ID` et
-`GITHUB_APP_PRIVATE_KEY` (PKCS#8) sont configurés. La GitHub App `BOG-QA` est installée
-sur `jinshiagencys-byte/BOG`.
+`run-manifest`, `report-run` et `send-invite-email` sont déployées ; les secrets
+`GITHUB_APP_ID` et `GITHUB_APP_PRIVATE_KEY` (PKCS#8) sont configurés. La GitHub App
+`BOG-QA` est installée sur `jinshiagencys-byte/BOG`.
 
 Un premier run de bout en bout a été validé avec l’ancien agent OpenCode + MCP
 `chrome-devtools` : 7 cas exécutés (dont 2 découverts), résultats, étapes, preuves et
@@ -30,6 +30,7 @@ Les migrations ont été appliquées dans cet ordre, avec `supabase db push` :
 6. `20261022120500_v2_06_report_run.sql`
 7. `20261026120000_v2_07_org_creator_role.sql`
 8. `20261026130000_v2_08_org_invitations.sql`
+9. `20261026140000_v2_09_creator_role_invitation_email.sql`
 
 Les migrations sont additives : elles ne suppriment aucune donnée métier. Elles
 suppriment uniquement deux index redondants sur `crawl_reports`. Pour une nouvelle
@@ -46,7 +47,8 @@ instance, les tester d'abord sur une branche Supabase avant la production.
 | 05 | Policies RLS par organisation + helpers d'accès ; lectures membres, écritures admin ; `ci_run_tokens` réservé au `service_role` |
 | 06 | `create_run_manifest` (manifeste figé prêt pour l'agent + jeton éphémère), `attach_github_run`, `report_run` (ingestion idempotente de `qa_result.json`, cas découverts, cas omis bloqués, compteurs recalculés) — `service_role` uniquement |
 | 07 | `create_organization(p_name, p_role)` accepte le rôle choisi à l'onboarding (`owner`, `admin` ou `member`) et l'applique à l'adhésion du créateur |
-| 08 | `organization_invitations`, `list_organization_team`, `invite_organization_member`, `accept_my_invitations` : ajout direct d'un compte existant, invitation en attente sinon, acceptation automatique à la connexion |
+| 08 | `organization_invitations`, `list_organization_team`, `invite_organization_member`, `accept_my_invitations` : invitations en attente, acceptation à la connexion |
+| 09 | `organizations.created_by`, `set_my_organization_role` (le créateur choisit son rôle sur l'écran d'invitation) ; `invite_organization_member` ne crée plus l'adhésion immédiatement, même si le compte existe |
 
 ## Vérifications après application
 
@@ -193,6 +195,10 @@ Fichiers déployés avec `supabase functions deploy` :
   plus appelée par `fastbrowse-qa.yml`.
 - `supabase/functions/run-manifest/index.ts` : sert le manifeste figé au workflow,
   authentifié par `x-run-token`.
+- `supabase/functions/send-invite-email/index.ts` : vérifie le JWT de l'appelant,
+  contrôle qu'il est owner/admin et qu'une invitation en attente existe, puis envoie
+  l'email via Supabase Auth (`invite` pour une adresse inconnue, magic link pour un
+  compte existant). L'adhésion n'est jamais créée par cette fonction.
 
 Le workflow principal est `.github/workflows/fastbrowse-qa.yml` avec le runner
 `.github/qa/fastbrowse-runner.mjs`, les objectifs `.github/qa/fastbrowse-cases.json` et la
@@ -208,6 +214,20 @@ accepté comme alias. Le `installation_id` est stocké par organisation dans
 `github_integrations` ; aucune clé privée ni token GitHub n'est en base.
 `github_integrations.workflow_file` reste `antigravity-qa.yml` pour le fallback ;
 `start-run` force `fastbrowse-qa.yml` par défaut.
+
+`send-invite-email` accepte en option les secrets `APP_URL` (origine de production) et
+`APP_ORIGINS` (liste d'origines séparées par des virgules) pour valider le retour des
+liens d'invitation. Sans ces secrets, seules les origines locales
+(`localhost`/`127.0.0.1` ports 3000, 5173 et 4173) sont acceptées.
+
+## Invitations par email — limite du fournisseur par défaut
+
+L'écran `/onboarding/members` enregistre les invitations, puis appelle
+`send-invite-email`. Tant que le projet Supabase utilise le fournisseur d'email par
+défaut (gratuit, sans SMTP personnalisé), Supabase impose **2 emails par heure** et
+refuse la personnalisation des modèles. Les invitations au-delà de cette limite restent
+`pending` et s'activent à la première connexion de la personne, mais l'email n'est pas
+envoyé. Il faut configurer Resend, Brevo, Postmark ou un autre SMTP pour un usage réel.
 
 Côté GitHub Actions, le secret `OPENCODE_API_KEY` est **obligatoire** pour fastbrowse :
 le workflow s'arrête avec un message explicite s'il manque. Il alimente le LLM et Jev, et

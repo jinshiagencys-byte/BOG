@@ -2970,6 +2970,16 @@ select.td-control {
   width: 34rem;
 }
 
+.td-onb-role-field {
+  margin-top: 1.5rem;
+}
+.td-onb-role-field + .td-onb-invites {
+  margin-top: 1rem;
+}
+.td-onb-role-blocked {
+  margin-top: 1.25rem;
+}
+
 .td-onb-invites {
   margin-top: 1.5rem;
 }

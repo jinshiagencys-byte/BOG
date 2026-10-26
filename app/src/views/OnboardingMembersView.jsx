@@ -1,9 +1,9 @@
-// Étape 2 de l'onboarding : inviter les premiers membres.
+// Étape 2 de l'onboarding : rôle du créateur et invitations.
 //
-// On y arrive juste après « Créer l’organisation ». Le créateur peut ajouter
-// plusieurs personnes en une fois, avec un rôle par ligne. Un compte existant
-// est ajouté immédiatement ; sinon l'invitation reste en attente et sera
-// acceptée automatiquement à la prochaine connexion avec cet email.
+// On y arrive juste après « Créer l’organisation ». Le créateur choisit son
+// rôle ici, puis peut ajouter plusieurs personnes en une fois. Chaque adresse
+// reçoit un email d'invitation ; l'adhésion n'est créée qu'à la première
+// authentification de la personne dans l'app.
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import BrandLogo from '../components/BrandLogo.jsx'
@@ -14,7 +14,27 @@ import {
   inviteOrganizationMember,
   listOrganizationTeam,
   messageForError,
+  sendOrganizationInviteEmail,
+  setMyOrganizationRole,
 } from '../lib/api.js'
+
+const ROLES = [
+  {
+    value: 'owner',
+    label: 'Propriétaire',
+    hint: 'Contrôle total de l’organisation et de ses paramètres.',
+  },
+  {
+    value: 'admin',
+    label: 'Administrateur',
+    hint: 'Peut gérer les projets, les intégrations et les paramètres.',
+  },
+  {
+    value: 'member',
+    label: 'Membre',
+    hint: 'Peut consulter les projets et exécuter les tests.',
+  },
+]
 
 const INVITE_ROLES = [
   { value: 'member', label: 'Membre' },
@@ -45,11 +65,17 @@ export default function OnboardingMembersView() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const { activeOrg, membershipRole, setActiveOrg } = useApp()
-  const { user, organizationsLoaded } = useAuth()
+  const { user, organizationsLoaded, refreshOrganizations } = useAuth()
 
   const orgId = searchParams.get('org') || activeOrg?.id || null
   const org = activeOrg?.id === orgId ? activeOrg : null
-  const canInvite = membershipRole === 'owner' || membershipRole === 'admin'
+  const isCreator = Boolean(org?.createdBy && user?.id && org.createdBy === user.id)
+
+  const [creatorRole, setCreatorRole] = useState(null)
+  const [roleSaving, setRoleSaving] = useState(false)
+  const [roleError, setRoleError] = useState('')
+
+  const effectiveRole = creatorRole ?? membershipRole ?? 'admin'
 
   const [team, setTeam] = useState([])
   const [loading, setLoading] = useState(true)
@@ -58,6 +84,10 @@ export default function OnboardingMembersView() {
   const [formError, setFormError] = useState('')
   const [notice, setNotice] = useState('')
   const [submitting, setSubmitting] = useState(false)
+
+  const roleLoaded = Boolean(membershipRole)
+  const canInvite =
+    roleLoaded && (effectiveRole === 'owner' || effectiveRole === 'admin')
 
   // Garde l'organisation active alignée avec le paramètre d'URL, notamment
   // après un rechargement de la page.
@@ -88,6 +118,24 @@ export default function OnboardingMembersView() {
       mounted = false
     }
   }, [orgId])
+
+  const changeRole = async (next) => {
+    if (!orgId || next === effectiveRole) return
+    setCreatorRole(next)
+    setRoleError('')
+    setFormError('')
+    setNotice('')
+    setRoleSaving(true)
+    try {
+      await setMyOrganizationRole(orgId, next)
+      await refreshOrganizations()
+    } catch (error) {
+      setCreatorRole(null)
+      setRoleError(messageForError(error))
+    } finally {
+      setRoleSaving(false)
+    }
+  }
 
   const updateInvite = (id, key, value) => {
     setInvites((rows) =>
@@ -152,7 +200,20 @@ export default function OnboardingMembersView() {
       for (const row of rows) {
         try {
           const result = await inviteOrganizationMember(orgId, row.email, row.role)
-          results.push(result)
+          let emailSent = false
+          let emailError = ''
+
+          if (result?.status === 'invited') {
+            try {
+              const mail = await sendOrganizationInviteEmail(orgId, row.email)
+              emailSent = mail?.sent !== false
+              emailError = mail?.sent === false ? mail?.error || 'INVITE_EMAIL_FAILED' : ''
+            } catch (error) {
+              emailError = error?.code || 'INVITE_EMAIL_FAILED'
+            }
+          }
+
+          results.push({ ...result, emailSent, emailError })
         } catch (error) {
           errors.push({ row, message: messageForError(error) })
         }
@@ -164,16 +225,19 @@ export default function OnboardingMembersView() {
         /* la liste sera rechargée à la prochaine ouverture */
       }
 
-      const added = results.filter((result) => result?.status === 'added').length
-      const invited = results.filter((result) => result?.status === 'invited').length
+      const invited = results.filter((result) => result?.status === 'invited')
+      const emailed = invited.filter((result) => result.emailSent).length
+      const unemailed = invited.length - emailed
       const already = results.filter((result) => result?.status === 'already_member').length
       const parts = []
-      if (added) {
-        parts.push(`${added} membre${added > 1 ? 's' : ''} ajouté${added > 1 ? 's' : ''}`)
-      }
-      if (invited) {
+      if (emailed) {
         parts.push(
-          `${invited} invitation${invited > 1 ? 's' : ''} enregistrée${invited > 1 ? 's' : ''}`,
+          `${emailed} invitation${emailed > 1 ? 's' : ''} envoyée${emailed > 1 ? 's' : ''} par email`,
+        )
+      }
+      if (unemailed) {
+        parts.push(
+          `${unemailed} invitation${unemailed > 1 ? 's' : ''} enregistrée${unemailed > 1 ? 's' : ''} (email non envoyé)`,
         )
       }
       if (already) {
@@ -184,9 +248,23 @@ export default function OnboardingMembersView() {
       }
       if (parts.length) setNotice(`${parts.join(' · ')}.`)
 
-      if (errors.length) {
+      const rateLimited = results.some(
+        (result) => result?.emailError === 'EMAIL_RATE_LIMITED',
+      )
+      if (rateLimited) {
         setFormError(
-          errors.map(({ row, message }) => `${row.email} : ${message}`).join(' '),
+          'Supabase limite temporairement l’envoi d’emails. Les invitations sont enregistrées et seront acceptées à la première connexion ; réessayez l’envoi plus tard.',
+        )
+      }
+
+      if (errors.length) {
+        setFormError((previous) =>
+          [
+            previous,
+            errors.map(({ row, message }) => `${row.email} : ${message}`).join(' '),
+          ]
+            .filter(Boolean)
+            .join(' '),
         )
         setInvites(errors.map(({ row }) => ({ ...row })))
       } else {
@@ -199,6 +277,9 @@ export default function OnboardingMembersView() {
 
   const finish = () => navigate('/projects', { replace: true })
 
+  const selectedRole =
+    ROLES.find((role) => role.value === effectiveRole) || ROLES[1]
+
   return (
     <main className="td-onb">
       <Link to="/onboarding" className="td-onb-brand">
@@ -210,9 +291,41 @@ export default function OnboardingMembersView() {
         <h1 className="td-onb-title">Invitez votre équipe</h1>
         <p className="td-onb-sub">
           Ajoutez les personnes qui doivent accéder à{' '}
-          <strong>{org?.name || 'votre organisation'}</strong>. Cette étape est
-          facultative : vous pouvez la passer.
+          <strong>{org?.name || 'votre organisation'}</strong>. Chacune recevra
+          une invitation par email et rejoindra l’organisation à sa première
+          connexion. Cette étape est facultative : vous pouvez la passer.
         </p>
+
+        {isCreator ? (
+          <div className="td-onb-field td-onb-role-field">
+            <label className="td-onb-label" htmlFor="onb-creator-role">
+              Votre rôle <span className="td-req">*</span>
+            </label>
+            <div className="td-onb-select">
+              <select
+                id="onb-creator-role"
+                className="td-onb-input"
+                value={effectiveRole}
+                disabled={roleSaving}
+                onChange={(event) => changeRole(event.target.value)}
+              >
+                {ROLES.map((role) => (
+                  <option key={role.value} value={role.value}>
+                    {role.label}
+                  </option>
+                ))}
+              </select>
+              <Icon name="chevron-down" className="td-onb-chevron" />
+            </div>
+            <p className="td-onb-hint">{selectedRole.hint}</p>
+            {roleSaving ? <p className="td-onb-hint">Enregistrement du rôle…</p> : null}
+            {roleError ? (
+              <p className="td-onb-error" role="alert">
+                {roleError}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
 
         {canInvite ? (
           <form className="td-onb-invites" onSubmit={add} noValidate>
@@ -262,20 +375,26 @@ export default function OnboardingMembersView() {
                 <Icon name="plus" className="td-ic-16" />
                 <span>Ajouter une ligne</span>
               </button>
-              <button className="td-onb-add" type="submit" disabled={submitting}>
+              <button
+                className="td-onb-add"
+                type="submit"
+                disabled={submitting || roleSaving}
+              >
                 {submitting
-                  ? 'Ajout…'
+                  ? 'Envoi…'
                   : invites.length > 1
                     ? 'Ajouter les membres'
                     : 'Ajouter'}
               </button>
             </div>
           </form>
-        ) : (
-          <p className="td-onb-hint">
-            Seuls les propriétaires et les administrateurs peuvent inviter des membres.
+        ) : roleLoaded ? (
+          <p className="td-onb-hint td-onb-role-blocked">
+            {effectiveRole === 'member'
+              ? 'En tant que membre, vous ne pouvez pas inviter d’autres personnes. Choisissez Administrateur ou Propriétaire pour envoyer des invitations.'
+              : 'Seuls les propriétaires et les administrateurs peuvent inviter des membres.'}
           </p>
-        )}
+        ) : null}
 
         {formError ? (
           <p className="td-onb-error" role="alert">
@@ -328,8 +447,8 @@ export default function OnboardingMembersView() {
           )}
 
           <p className="td-onb-hint">
-            Les invitations en attente s’activent automatiquement à la prochaine connexion
-            avec l’email indiqué.
+            Une invitation en attente devient une adhésion active dès que la personne
+            se connecte à l’app avec l’email indiqué.
           </p>
         </div>
 

@@ -15,6 +15,7 @@ export function mapMembership(row) {
     plan: org.plan,
     isDemo: Boolean(org.is_demo),
     role: row.role,
+    createdBy: org.created_by || null,
     createdAt: org.created_at,
     joinedAt: row.created_at,
   }

@@ -10,7 +10,7 @@ en français ; les écrans d’authentification sont en anglais.
 | --- | --- |
 | `/auth`, `/auth/signup`, `/auth/reset`, `/auth/callback` | Connexion, création de compte, mot de passe oublié, retour OAuth |
 | `/onboarding` | Création de l’organisation (plein page, hors shell) |
-| `/onboarding/members` | Invitation des premiers membres après la création de l’organisation |
+| `/onboarding/members` | Rôle du créateur et invitation des premiers membres après la création de l’organisation |
 | `/projects` | Espace organisation : projets, plan, état de l’intégration GitHub |
 | `/org-settings` | Intégration GitHub de l’organisation (dépôt, workflow, branche, installation) |
 | `/:project/dashboard` | Tableau de bord réel du projet |
@@ -144,13 +144,16 @@ optimisation naturelle.
 
 - **Authentification** : Google OAuth est configuré côté Supabase ; le bouton SSO a été
   retiré. La confirmation d’email reste obligatoire.
-- **Rôles** : l’onboarding enregistre le rôle du créateur (`owner`, `admin` ou `member`)
-  dans `organization_members`.
+- **Rôles** : le rôle du créateur (`owner`, `admin` ou `member`) est choisi sur
+  `/onboarding/members`, avec les invitations, puis enregistré dans
+  `organization_members` via `set_my_organization_role`.
 - **Invitations** : après la création de l’organisation, `/onboarding/members` permet
   d’ajouter plusieurs membres en une fois (bouton « Ajouter une ligne »), avec un
-  rôle par ligne. Un compte existant est ajouté immédiatement ; sinon l’invitation
-  est acceptée automatiquement à sa prochaine connexion. L’envoi d’email
-  d’invitation n’est pas encore branché.
+  rôle par ligne. Chaque adresse reçoit un email d’invitation ; l’adhésion n’est
+  créée qu’à la première authentification de la personne dans l’app, qui vaut
+  acceptation. Tant que Supabase utilise son fournisseur d’email par défaut, l’envoi
+  est limité à 2 emails/heure ; au-delà, l’invitation reste en attente et s’active à
+  la connexion. Un SMTP personnalisé est requis pour un usage réel.
 - La taille d’équipe choisie à l’onboarding n’est pas persistée (choix produit).
 - Les pages « Analyses », « Utilisateurs et rôles » et « Facturation » restent des écrans
   d’attente.

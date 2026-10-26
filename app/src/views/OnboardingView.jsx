@@ -7,7 +7,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import BrandLogo from '../components/BrandLogo.jsx'
-import Icon from '../components/Icon.jsx'
 import { useApp } from '../app/app-context.js'
 import { useAuth } from '../app/auth-context.js'
 import { createOrganization, messageForError } from '../lib/api.js'
@@ -15,36 +14,14 @@ import { createOrganization, messageForError } from '../lib/api.js'
 // Tailles d'équipe : ce sont les 6 valeurs affichées sur le site réel.
 const TEAM_SIZES = ['1', '2-10', '11-50', '51-100', '101-250', '250+']
 
-// Rôles proposés au créateur de l'organisation. Ils correspondent aux valeurs
-// acceptées par `organization_members.role` et aux contrôles d'accès de l'app.
-const ROLES = [
-  {
-    value: 'owner',
-    label: 'Propriétaire',
-    hint: 'Contrôle total de l’organisation et de ses paramètres.',
-  },
-  {
-    value: 'admin',
-    label: 'Administrateur',
-    hint: 'Peut gérer les projets, les intégrations et les paramètres.',
-  },
-  {
-    value: 'member',
-    label: 'Membre',
-    hint: 'Peut consulter les projets et exécuter les tests.',
-  },
-]
-
 export default function OnboardingView() {
   const navigate = useNavigate()
   const { setActiveOrg } = useApp()
   const { refreshOrganizations } = useAuth()
-  const [form, setForm] = useState({ name: '', teamSize: '', role: 'admin' })
+  const [form, setForm] = useState({ name: '', teamSize: '' })
   const [errors, setErrors] = useState({})
   const [submitError, setSubmitError] = useState('')
   const [submitting, setSubmitting] = useState(false)
-
-  const selectedRole = ROLES.find((role) => role.value === form.role) || ROLES[1]
 
   const set = (key, value) => {
     setForm((f) => ({ ...f, [key]: value }))
@@ -53,21 +30,19 @@ export default function OnboardingView() {
 
   // Les champs sont marqués obligatoires (`*`) sur le site : on valide à la
   // soumission, on enregistre l'organisation puis on rejoint son espace.
+  // Le rôle du créateur est choisi à l'étape suivante, avec les invitations.
   const submit = async (event) => {
     event.preventDefault()
     setSubmitError('')
     const next = {}
     if (!form.name.trim()) next.name = 'Veuillez saisir le nom de votre organisation.'
     if (!form.teamSize) next.teamSize = 'Veuillez sélectionner la taille de votre équipe.'
-    if (!ROLES.some((role) => role.value === form.role)) {
-      next.role = 'Veuillez sélectionner votre rôle.'
-    }
     setErrors(next)
     if (Object.keys(next).length > 0) return
 
     setSubmitting(true)
     try {
-      const org = await createOrganization(form.name, form.role)
+      const org = await createOrganization(form.name, 'admin')
       await refreshOrganizations()
       setActiveOrg(org.id)
       navigate(`/onboarding/members?org=${encodeURIComponent(org.id)}`, { replace: true })
@@ -110,30 +85,6 @@ export default function OnboardingView() {
           </div>
 
           <div className="td-onb-field">
-            <label className="td-onb-label" htmlFor="onb-role">
-              Votre rôle <span className="td-req">*</span>
-            </label>
-            <div className="td-onb-select">
-              <select
-                id="onb-role"
-                className="td-onb-input"
-                value={form.role}
-                aria-invalid={Boolean(errors.role)}
-                onChange={(e) => set('role', e.target.value)}
-              >
-                {ROLES.map((role) => (
-                  <option key={role.value} value={role.value}>
-                    {role.label}
-                  </option>
-                ))}
-              </select>
-              <Icon name="chevron-down" className="td-onb-chevron" />
-            </div>
-            <p className="td-onb-hint">{selectedRole.hint}</p>
-            {errors.role ? <p className="td-onb-error">{errors.role}</p> : null}
-          </div>
-
-          <div className="td-onb-field">
             <span className="td-onb-label" id="onb-size-label">
               Taille de l’équipe <span className="td-req">*</span>
             </span>
@@ -151,7 +102,9 @@ export default function OnboardingView() {
                 </button>
               ))}
             </div>
-            <p className="td-onb-hint">Vous pourrez inviter des membres après la configuration</p>
+            <p className="td-onb-hint">
+              Vous choisirez votre rôle et pourrez inviter des membres à l’étape suivante.
+            </p>
             {errors.teamSize ? <p className="td-onb-error">{errors.teamSize}</p> : null}
           </div>
 
