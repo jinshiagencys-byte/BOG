@@ -220,25 +220,23 @@ accepté comme alias. Le `installation_id` est stocké par organisation dans
 liens d'invitation. Sans ces secrets, seules les origines locales
 (`localhost`/`127.0.0.1` ports 3000, 5173 et 4173) sont acceptées.
 
-## Invitations par email — limite du fournisseur par défaut
+## Invitations par email — SMTP configuré
 
 L'écran `/onboarding/members` enregistre les invitations, puis appelle
-`send-invite-email`. Tant que le projet Supabase utilise le fournisseur d'email par
-défaut (gratuit, sans SMTP personnalisé), Supabase impose **2 emails par heure** et
-refuse la personnalisation des modèles. Les invitations au-delà de cette limite restent
-`pending` et s'activent à la première connexion de la personne, mais l'email n'est pas
-envoyé.
+`send-invite-email`. Le projet utilise désormais un **SMTP Brevo** (clé nommée
+`BOG-QA`) : les emails d'invitation et les magic links partent avec l'expéditeur
+vérifié, la limite Supabase est fixée à **30 emails/heure** et les modèles
+d'invitation BOG sont appliqués. Brevo gratuit autorise 300 emails/jour.
 
-Des offres gratuites existent : **Brevo** (300 emails/jour, expéditeur vérifié sans
-domaine), **Resend** (100 emails/jour, domaine ou adresse de test) ou **Mailjet**
-(200 emails/jour). Brevo est le plus simple pour envoyer à n'importe quelle adresse
-après vérification d'une seule adresse expéditrice.
+Sans SMTP personnalisé, Supabase impose **2 emails par heure** et refuse la
+personnalisation des modèles. Les invitations au-delà de cette limite restent
+`pending` et s'activent à la première connexion de la personne, mais l'email n'est
+pas envoyé.
 
-1. Créer le compte du fournisseur et vérifier l'adresse expéditrice.
-2. Renseigner les variables dans `supabase/.env.local` :
-   `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_ADMIN_EMAIL`,
-   `SMTP_SENDER_NAME` et éventuellement `EMAIL_RATE_LIMIT`.
-3. Lancer :
+Pour un autre fournisseur gratuit (**Resend** 100 emails/jour, **Mailjet**
+200 emails/jour), renseigner les variables dans `supabase/.env.local` :
+`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_ADMIN_EMAIL`,
+`SMTP_SENDER_NAME` et éventuellement `EMAIL_RATE_LIMIT`, puis lancer :
 
 ```bash
 node supabase/scripts/configure-smtp.mjs

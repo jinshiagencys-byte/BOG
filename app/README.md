@@ -151,9 +151,8 @@ optimisation naturelle.
   d’ajouter plusieurs membres en une fois (bouton « Ajouter une ligne »), avec un
   rôle par ligne. Chaque adresse reçoit un email d’invitation ; l’adhésion n’est
   créée qu’à la première authentification de la personne dans l’app, qui vaut
-  acceptation. Tant que Supabase utilise son fournisseur d’email par défaut, l’envoi
-  est limité à 2 emails/heure ; au-delà, l’invitation reste en attente et s’active à
-  la connexion. Un SMTP personnalisé est requis pour un usage réel.
+  acceptation. L’envoi passe par un SMTP Brevo configuré côté Supabase (limite
+  applicative : 30 emails/heure ; offre Brevo gratuite : 300 emails/jour).
 - La taille d’équipe choisie à l’onboarding n’est pas persistée (choix produit).
 - Les pages « Analyses », « Utilisateurs et rôles » et « Facturation » restent des écrans
   d’attente.
