@@ -4584,22 +4584,18 @@ select.td-control {
 .td-admin-person-chip {
   display: inline-flex;
   align-items: center;
-  gap: 0.45rem;
+  gap: 0.55rem;
   max-width: 22rem;
   min-width: 0;
-  padding: 0.15rem 0.6rem 0.15rem 0.15rem;
-  border: 1px solid hsl(var(--border));
-  border-radius: 0.5rem;
-  background: hsl(var(--background));
 }
 .td-admin-avatar {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 1.65rem;
-  height: 1.65rem;
+  width: 1.9rem;
+  height: 1.9rem;
   flex-shrink: 0;
-  border-radius: 0.35rem;
+  border-radius: 999px;
   background: hsl(var(--muted));
   color: hsl(var(--foreground));
   font-size: 0.6875rem;
@@ -4608,10 +4604,6 @@ select.td-control {
 .td-admin-avatar.is-muted {
   background: hsl(var(--accent));
   color: hsl(var(--muted-foreground));
-}
-.td-admin-table tr.is-invitation .td-admin-person-chip {
-  border-style: dashed;
-  background: transparent;
 }
 .td-admin-person-main {
   display: grid;
