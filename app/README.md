@@ -173,6 +173,11 @@ Après une mutation, le pont émet `bog:team-changed` ; la page `/users` se
 recharge automatiquement. Les RPC continuent d’appliquer la hiérarchie
 owner > admin > member, indépendamment de l’agent.
 
+Côté QA, un cas peut déclarer `webmcp.tool` dans
+`.github/qa/fastbrowse-cases.json` : `.github/qa/webmcp-executor.mjs` exécute
+l’outil dans Chrome et le runner applique ses assertions, sans fastbrowse ni clé
+OpenCode. Voir `docs/qa-fastbrowse.md`.
+
 Pour tester localement dans Chrome 149+ : activer
 `chrome://flags/#enable-webmcp-testing` puis relancer le navigateur. En
 headless : `--enable-features=WebMCPTesting`. Une origine publique devra
