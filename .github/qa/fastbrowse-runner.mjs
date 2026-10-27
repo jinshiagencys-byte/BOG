@@ -758,6 +758,8 @@ function compactWebMcpEvidence(spec, verdict) {
     webmcp_confirmation_requested: spec.confirm === true,
     webmcp_tools_detected: execution.tools ?? [],
     elapsed_ms: execution.durationMs ?? null,
+    // `url` alimente evidence_url côté base, sans capture d’écran.
+    url: verdict.finalUrl || null,
     final_url: verdict.finalUrl || null,
     expectations: spec.expect ?? {},
     url_ok: verdict.urlOk,
