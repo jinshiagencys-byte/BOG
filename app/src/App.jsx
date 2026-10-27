@@ -11,6 +11,7 @@ import PlaceholderView from './views/PlaceholderView.jsx'
 import ProjectsView from './views/ProjectsView.jsx'
 import GithubSettingsView from './views/GithubSettingsView.jsx'
 import ProjectSettingsView from './views/ProjectSettingsView.jsx'
+import UsersView from './views/UsersView.jsx'
 import { NAV_FLAT, ORG_NAV_FLAT } from './app/nav.js'
 import {
   AuthCallback,
@@ -55,10 +56,11 @@ export default function App() {
         <Route element={<RequireOrg />}>
           <Route element={<AppShell variant="org" />}>
             <Route path="/projects" element={<ProjectsView />} />
+            <Route path="/users" element={<UsersView />} />
             <Route path="/org-settings" element={<GithubSettingsView />} />
             <Route path="/billing" element={<PlaceholderView title="Facturation" />} />
             {ORG_NAV_FLAT.filter(
-              (item) => !['/projects', '/org-settings'].includes(item.to),
+              (item) => !['/projects', '/users', '/org-settings'].includes(item.to),
             ).map((item) => (
               <Route
                 key={item.to}

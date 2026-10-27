@@ -151,6 +151,12 @@ optimisation naturelle.
 - **Rôles** : le rôle du créateur (`owner`, `admin` ou `member`) est choisi sur
   `/onboarding/members`, avec les invitations, puis enregistré dans
   `organization_members` via `set_my_organization_role`.
+- **Équipe** : `/users` (« Utilisateurs et rôles ») liste les membres actifs et les
+  invitations en attente, permet d’inviter, de changer un rôle, de retirer un membre
+  et de révoquer une invitation. Les mutations passent par
+  `update_organization_member_role`, `remove_organization_member` et
+  `revoke_organization_invitation` : un admin gère les membres, seul un owner peut
+  nommer un owner, et le dernier propriétaire ne peut pas être retiré.
 - **Invitations** : après la création de l’organisation, `/onboarding/members` permet
   d’ajouter plusieurs membres en une fois (bouton « Ajouter une ligne »), avec un
   rôle par ligne. Chaque adresse reçoit un email d’invitation ; l’adhésion n’est
@@ -158,8 +164,7 @@ optimisation naturelle.
   acceptation. L’envoi passe par un SMTP Brevo configuré côté Supabase (limite
   applicative : 30 emails/heure ; offre Brevo gratuite : 300 emails/jour).
 - La taille d’équipe choisie à l’onboarding n’est pas persistée (choix produit).
-- Les pages « Analyses », « Utilisateurs et rôles » et « Facturation » restent des écrans
-  d’attente.
+- Les pages « Analyses » et « Facturation » restent des écrans d’attente.
 - L’export des cas de test affiche une confirmation mais ne génère pas encore de fichier.
 - L’intégration GitHub est unique par organisation : tous ses projets partagent le même
   dépôt, workflow et branche.

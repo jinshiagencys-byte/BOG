@@ -35,6 +35,10 @@ const ERROR_MESSAGES = {
   INVITE_SELF: 'Vous êtes déjà membre de cette organisation.',
   INVITE_NOT_FOUND: 'Invitation introuvable ou déjà utilisée.',
   INVITE_FIELDS_REQUIRED: "L'organisation et l'email sont requis.",
+  MEMBER_NOT_FOUND: "Ce membre n'existe plus dans l'organisation.",
+  MEMBER_SELF: 'Vous ne pouvez pas modifier votre propre rôle ici.',
+  MEMBER_LAST_OWNER:
+    "L'organisation doit conserver au moins un propriétaire. Nommez d'abord un autre propriétaire.",
   EMAIL_RATE_LIMITED:
     'L’invitation est enregistrée, mais Supabase limite temporairement l’envoi d’emails. Réessayez plus tard.',
   INVITE_EMAIL_FAILED:
@@ -208,6 +212,34 @@ export async function sendOrganizationInviteEmail(orgId, email) {
     )
   }
 
+  return data
+}
+
+export async function updateOrganizationMemberRole(orgId, userId, role) {
+  const { data, error } = await supabase.rpc('update_organization_member_role', {
+    p_org_id: orgId,
+    p_user_id: userId,
+    p_role: role,
+  })
+  if (error) throw toApiError(error)
+  return data
+}
+
+export async function removeOrganizationMember(orgId, userId) {
+  const { data, error } = await supabase.rpc('remove_organization_member', {
+    p_org_id: orgId,
+    p_user_id: userId,
+  })
+  if (error) throw toApiError(error)
+  return data
+}
+
+export async function revokeOrganizationInvitation(orgId, email) {
+  const { data, error } = await supabase.rpc('revoke_organization_invitation', {
+    p_org_id: orgId,
+    p_email: String(email || '').trim(),
+  })
+  if (error) throw toApiError(error)
   return data
 }
 
