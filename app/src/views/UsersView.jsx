@@ -105,6 +105,14 @@ export default function UsersView() {
     load()
   }, [load])
 
+  // Les outils WebMCP peuvent modifier l’équipe depuis la page : on recharge
+  // le tableau quand le pont signale un changement.
+  useEffect(() => {
+    const onTeamChanged = () => load()
+    window.addEventListener('bog:team-changed', onTeamChanged)
+    return () => window.removeEventListener('bog:team-changed', onTeamChanged)
+  }, [load])
+
   const members = useMemo(
     () =>
       team

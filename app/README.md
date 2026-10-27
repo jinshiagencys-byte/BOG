@@ -160,9 +160,18 @@ Outils déclarés :
 - `bog_open_page` — navigue vers une page autorisée de l’espace organisation ;
 - `bog_list_team` — membres et invitations en attente.
 
-Les outils sont en lecture seule ou limités à une navigation interne ; aucune
-mutation (invitation, changement de rôle, suppression) n’est exposée pour
-l’instant.
+Les outils sont en lecture seule ou limités à une navigation interne. Les actions
+d’équipe sont également exposées, mais **toujours derrière une confirmation
+visible** (`window.confirm`) et avec `consequentialHint` :
+
+- `bog_invite_member` — invite une adresse avec le rôle membre ou admin ;
+- `bog_update_member_role` — change le rôle d’un membre ;
+- `bog_remove_member` — retire un membre ;
+- `bog_revoke_invitation` — révoque une invitation en attente.
+
+Après une mutation, le pont émet `bog:team-changed` ; la page `/users` se
+recharge automatiquement. Les RPC continuent d’appliquer la hiérarchie
+owner > admin > member, indépendamment de l’agent.
 
 Pour tester localement dans Chrome 149+ : activer
 `chrome://flags/#enable-webmcp-testing` puis relancer le navigateur. En

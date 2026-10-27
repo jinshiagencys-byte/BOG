@@ -59,7 +59,7 @@ export async function openProbe(probeDir) {
     const browser = await playwright.chromium.launch({
       executablePath,
       headless: true,
-      args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+      args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--enable-features=WebMCPTesting'],
     })
     return { available: true, browser, executablePath }
   } catch (error) {
@@ -171,6 +171,31 @@ export async function probeUrl(probe, options) {
 
   const finalUrl = page.url()
   const durationMs = Math.round(performance.now() - started)
+
+  // WebMCP : si la cible expose des outils (Chrome 149+ avec le flag), on les
+  // remonte pour que le runner puisse les exploiter. Aucune exécution ici.
+  const webmcp = await page
+    .evaluate(async () => {
+      if (!document.modelContext || typeof document.modelContext.getTools !== 'function') {
+        return { available: false, tools: [] }
+      }
+      try {
+        const tools = await document.modelContext.getTools()
+        return {
+          available: true,
+          tools: tools.map((tool) => ({
+            name: tool.name,
+            description: tool.description ?? '',
+            read_only: tool.annotations?.readOnlyHint ?? null,
+            consequential: tool.annotations?.consequentialHint ?? null,
+          })),
+        }
+      } catch (error) {
+        return { available: true, tools: [], error: String(error?.message ?? error) }
+      }
+    })
+    .catch((error) => ({ available: false, tools: [], error: String(error?.message ?? error) }))
+
   await context.close().catch(() => {})
 
   return {
@@ -188,5 +213,6 @@ export async function probeUrl(probe, options) {
     negative,
     text: textContent.slice(0, 8000),
     consoleErrors: [...new Set(consoleErrors)].slice(0, 12),
+    webmcp,
   }
 }

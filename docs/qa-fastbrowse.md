@@ -84,6 +84,9 @@ relancer de batch QA complet avant que ce test unitaire passe.
    seul. Les textes attendus, les textes interdits, l'URL, le seuil de 5 s et la console
    sont vérifiés par le runner et la sonde.
 6. Le rapport est envoyé à `report-run` avec `executor: "fastbrowse"`.
+7. La sonde lance Chrome avec `--enable-features=WebMCPTesting` et remonte les outils
+   WebMCP exposés par la cible dans `probe.webmcp`. Le runner les journalise et les
+   inclut dans `qa_result.json` ; ils ne modifient pas encore le verdict.
 
 Seuils des quatre cas principaux : `maxContentMs: 5000`, `maxWaitMs: 15000`.
 

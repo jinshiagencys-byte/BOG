@@ -636,6 +636,7 @@ function compactEvidence(c, goal, run, verdict) {
       excerpt: verdict.excerpt,
       console_errors: verdict.probe.consoleErrors ?? [],
       nav_error: verdict.probe.navError ?? null,
+      webmcp: verdict.probe.webmcp ?? null,
     } : null,
     network_findings: verdict.transient?.map((finding) => ({ title: finding.title, detail: finding.detail })) ?? [],
     cached: run.cached === true,
@@ -738,6 +739,10 @@ try {
     const verdict = await verify(c, goal, run, probeBrowser)
     console.log(`  ${verdict.status.toUpperCase()} (${verdict.reason}) · ${run.durationMs} ms · ${run.json?.steps?.length ?? '?'} étapes`)
     console.log(`  ${verdict.actual.slice(0, 700)}`)
+    const webmcpTools = verdict.probe?.webmcp?.tools ?? []
+    if (webmcpTools.length) {
+      console.log(`  WebMCP : ${webmcpTools.length} outil(s) — ${webmcpTools.map((tool) => tool.name).join(', ')}`)
+    }
     results.push({
       code: c.code,
       title: c.title,
