@@ -12,6 +12,7 @@ import ProjectsView from './views/ProjectsView.jsx'
 import GithubSettingsView from './views/GithubSettingsView.jsx'
 import ProjectSettingsView from './views/ProjectSettingsView.jsx'
 import UsersView from './views/UsersView.jsx'
+import WebMcpBridge from './app/WebMcpBridge.jsx'
 import { NAV_FLAT, ORG_NAV_FLAT } from './app/nav.js'
 import {
   AuthCallback,
@@ -26,7 +27,9 @@ const HOME = '/projects'
 
 export default function App() {
   return (
-    <Routes>
+    <>
+      <WebMcpBridge />
+      <Routes>
       {/* Authentification : plein page, hors du shell. */}
       <Route
         path="/auth"
@@ -101,6 +104,7 @@ export default function App() {
       ))}
 
       <Route path="*" element={<Navigate to={HOME} replace />} />
-    </Routes>
+      </Routes>
+    </>
   )
 }

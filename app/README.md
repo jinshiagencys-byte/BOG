@@ -144,6 +144,31 @@ Le build produit un avertissement de taille de bundle (recharts + supabase-js). 
 pas le déploiement ; un `React.lazy` sur le dashboard et les vues lourdes est la prochaine
 optimisation naturelle.
 
+## WebMCP (expérimental)
+
+BOG expose une poignée d’outils aux agents du navigateur via
+[WebMCP](https://developer.chrome.com/docs/ai/webmcp), en complément de l’UI
+classique. Le pont vit dans `src/lib/webmcp.js` et `src/app/WebMcpBridge.jsx` ;
+il ne s’active que si `document.modelContext` existe. Aucun autre navigateur
+n’est affecté.
+
+Outils déclarés :
+
+- `bog_get_context` — page courante, utilisateur, organisation, rôle, mode démo ;
+- `bog_list_projects` — projets visibles avec slug, catégorie et URL ;
+- `bog_open_project` — ouvre un tableau de bord par slug ou nom ;
+- `bog_open_page` — navigue vers une page autorisée de l’espace organisation ;
+- `bog_list_team` — membres et invitations en attente.
+
+Les outils sont en lecture seule ou limités à une navigation interne ; aucune
+mutation (invitation, changement de rôle, suppression) n’est exposée pour
+l’instant.
+
+Pour tester localement dans Chrome 149+ : activer
+`chrome://flags/#enable-webmcp-testing` puis relancer le navigateur. En
+headless : `--enable-features=WebMCPTesting`. Une origine publique devra
+rejoindre l’origin trial et fournir son jeton ; ce n’est pas configuré.
+
 ## Limites connues
 
 - **Authentification** : Google OAuth est configuré côté Supabase ; le bouton SSO a été
