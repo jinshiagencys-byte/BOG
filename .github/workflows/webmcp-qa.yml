@@ -100,6 +100,13 @@ jobs:
           NODE_PATH="$RUNNER_TEMP/qa-node/node_modules" \
             node -e "console.log('✓ playwright-core', require('playwright-core/package.json').version)"
 
+      - name: Installer ffmpeg Playwright
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Nécessaire pour recordVideo. Ne télécharge que ffmpeg.
+          node "$RUNNER_TEMP/qa-node/node_modules/playwright-core/cli.js" install ffmpeg
+
       - name: Récupérer le manifeste du run
         if: inputs.manifest_url != ''
         env:
@@ -164,6 +171,8 @@ jobs:
           REPORT_URL: ${{ inputs.report_url }}
           RUN_TOKEN: ${{ inputs.run_token }}
           WEBMCP_DELAY_MS: "0"
+          WEBMCP_VIDEO_DIR: ${{ github.workspace }}/qa-videos
+          WEBMCP_VIDEO_TAIL_MS: "700"
           GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         shell: bash
         run: |
@@ -189,5 +198,6 @@ jobs:
           path: |
             qa_result.json
             run_manifest.json
+            qa-videos/
           if-no-files-found: warn
           retention-days: 30

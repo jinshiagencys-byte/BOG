@@ -6,8 +6,12 @@
  * Chrome, avec la même sonde Playwright que `page-probe.mjs`. Le runner vérifie
  * ensuite le résultat avec ses propres expressions régulières : le verdict ne
  * dépend jamais de la réponse d’un modèle.
+ *
+ * Vidéo : si `videoDir` est fourni, Playwright enregistre la session du cas et
+ * l’enregistrement est déplacé vers `<videoDir>/<videoName>`.
  */
-import { existsSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
+import { join } from 'node:path'
 import { performance } from 'node:perf_hooks'
 
 function messageOf(error) {
@@ -17,6 +21,10 @@ function messageOf(error) {
 function asText(value) {
   if (value == null) return ''
   return typeof value === 'string' ? value : JSON.stringify(value)
+}
+
+function safeName(value) {
+  return String(value || 'cas').replace(/[^A-Za-z0-9._-]+/g, '-')
 }
 
 export async function runWebMcpTool(probe, options) {
@@ -29,6 +37,9 @@ export async function runWebMcpTool(probe, options) {
     confirm = false,
     timeoutMs = 15000,
     waitMs = 1200,
+    videoDir = null,
+    videoName = null,
+    videoTailMs = 700,
   } = options || {}
 
   if (!probe?.available) {
@@ -54,12 +65,19 @@ export async function runWebMcpTool(probe, options) {
     }
   }
 
+  const recording = Boolean(videoDir)
+  if (recording) mkdirSync(videoDir, { recursive: true })
+
   const context = await probe.browser.newContext({
     locale: 'fr-FR',
-    viewport: { width: 1440, height: 900 },
+    viewport: { width: 1280, height: 720 },
+    ...(recording
+      ? { recordVideo: { dir: join(videoDir, '.tmp'), size: { width: 1280, height: 720 } } }
+      : {}),
     ...(storageState ? { storageState } : {}),
   })
   const page = await context.newPage()
+  const video = page.video()
   let dialog = null
 
   // Un outil consequential peut ouvrir une confirmation. En QA, elle n’est
@@ -75,6 +93,7 @@ export async function runWebMcpTool(probe, options) {
     }
   })
 
+  let outcome
   try {
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 })
     if (waitMs > 0) await page.waitForTimeout(waitMs)
@@ -98,7 +117,7 @@ export async function runWebMcpTool(probe, options) {
     }
 
     if (!tools.includes(tool)) {
-      return {
+      outcome = {
         ok: false,
         available: true,
         tool,
@@ -109,49 +128,55 @@ export async function runWebMcpTool(probe, options) {
         durationMs: Math.round(performance.now() - started),
         url: page.url(),
       }
-    }
-
-    const execution = await page.evaluate(
-      async ({ name, input }) => {
-        const rows = await document.modelContext.getTools()
-        const found = rows.find((row) => row.name === name)
-        if (!found) return { ok: false, error: 'tool-not-found' }
-        // Chrome 155+ accepte l’objet ; 154 attend encore une chaîne JSON.
-        try {
-          return { ok: true, result: await document.modelContext.executeTool(found, input) }
-        } catch (first) {
+    } else {
+      const execution = await page.evaluate(
+        async ({ name, input }) => {
+          const rows = await document.modelContext.getTools()
+          const found = rows.find((row) => row.name === name)
+          if (!found) return { ok: false, error: 'tool-not-found' }
+          // Chrome 154 attend une chaîne JSON ; Chrome 155+ accepte aussi
+          // l’objet. La chaîne est donc le premier essai, l’objet le repli.
           try {
             return {
               ok: true,
               result: await document.modelContext.executeTool(found, JSON.stringify(input)),
             }
-          } catch (second) {
-            return {
-              ok: false,
-              error: messageOf(second),
-              firstError: messageOf(first),
+          } catch (first) {
+            try {
+              return { ok: true, result: await document.modelContext.executeTool(found, input) }
+            } catch (second) {
+              // `messageOf` vit côté Node : sérialiser ici, dans la page.
+              const describe = (error) => String(error?.message ?? error)
+              return {
+                ok: false,
+                error: describe(second),
+                firstError: describe(first),
+              }
             }
           }
-        }
-      },
-      { name: tool, input: args },
-    )
+        },
+        { name: tool, input: args },
+      )
 
-    return {
-      ok: execution.ok === true,
-      available: true,
-      tool,
-      args,
-      result: execution.result ?? null,
-      text: asText(execution.result),
-      tools,
-      dialog,
-      error: execution.ok ? null : execution.error ?? 'échec de l’outil',
-      durationMs: Math.round(performance.now() - started),
-      url: page.url(),
+      outcome = {
+        ok: execution.ok === true,
+        available: true,
+        tool,
+        args,
+        result: execution.result ?? null,
+        text: asText(execution.result),
+        tools,
+        dialog,
+        error: execution.ok ? null : execution.error ?? 'échec de l’outil',
+        durationMs: Math.round(performance.now() - started),
+        url: page.url(),
+      }
     }
+
+    // Laisse le temps de voir le résultat à l’écran avant d’arrêter la vidéo.
+    if (recording && videoTailMs > 0) await page.waitForTimeout(videoTailMs)
   } catch (error) {
-    return {
+    outcome = {
       ok: false,
       available: true,
       tool,
@@ -162,7 +187,25 @@ export async function runWebMcpTool(probe, options) {
       durationMs: Math.round(performance.now() - started),
       url: page.url(),
     }
-  } finally {
-    await context.close().catch(() => {})
+  }
+
+  await context.close().catch(() => {})
+
+  let videoPath = null
+  if (video) {
+    const target = join(videoDir || '', safeName(videoName || `webmcp-${tool}.webm`))
+    if (!target.endsWith('.webm')) target += '.webm'
+    try {
+      await video.saveAs(target)
+      videoPath = target
+    } catch {
+      // L’enregistrement est une preuve complémentaire, pas un critère de verdict.
+    }
+  }
+
+  return {
+    ...outcome,
+    durationMs: outcome?.durationMs ?? Math.round(performance.now() - started),
+    video: videoPath,
   }
 }

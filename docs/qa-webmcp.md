@@ -63,6 +63,19 @@ Le catalogue reste `.github/qa/fastbrowse-cases.json`.
   instrumenté.
 - `skipped` : étape non exécutée après un échec.
 
+## Vidéos
+
+Avec `WEBMCP_VIDEO_DIR`, chaque cas est enregistré par Playwright dans
+`<dir>/<CODE>.webm`. Le chemin est ajouté à `qa_result.json` (`videos`) et dans
+l'évidence de chaque étape (`video`). `WEBMCP_VIDEO_TAIL_MS` (700 ms par défaut) laisse le
+résultat visible avant l'arrêt.
+
+Le workflow écrit dans `qa-videos/` et archive le dossier avec `qa_result.json`. Les
+vidéos sont une preuve complémentaire : leur absence ne change pas le verdict.
+
+ffmpeg est nécessaire à `recordVideo`. Le workflow l'installe avec
+`playwright-core/cli.js install ffmpeg` (pas de navigateur supplémentaire).
+
 ## Lancer depuis l'application
 
 `start-run` accepte `executor: "webmcp"` et déclenche `webmcp-qa.yml`. Le rapport est
@@ -86,7 +99,7 @@ Sans `manifest_url`, le workflow :
 1. sert `.github/qa/fixtures/webmcp-demo.html` sur `127.0.0.1:4173` ;
 2. exécute `.github/qa/webmcp-demo-manifest.json` avec
    `.github/qa/webmcp-demo-cases.json` ;
-3. archive `qa_result.json`.
+3. archive `qa_result.json` et les vidéos de `qa-videos/`.
 
 La page de démonstration enregistre trois outils : `demo_echo`, `demo_add` et
 `demo_set_status` (mutation avec `window.confirm`). Les quatre cas vérifient une lecture,

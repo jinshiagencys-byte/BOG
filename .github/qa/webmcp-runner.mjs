@@ -60,6 +60,8 @@ const GOALS_FILE = resolve(env('WEBMCP_CASES', join(HERE, 'fastbrowse-cases.json
 const OUTPUT_FILE = resolve(env('QA_OUTPUT', join(ROOT, 'qa_result.json')))
 const TARGET_URL = env('TARGET_URL', 'http://127.0.0.1:4173/webmcp-demo.html')
 const CASE_DELAY_MS = Number(env('WEBMCP_DELAY_MS', '0'))
+const VIDEO_DIR = env('WEBMCP_VIDEO_DIR') ? resolve(env('WEBMCP_VIDEO_DIR')) : null
+const VIDEO_TAIL_MS = Number(env('WEBMCP_VIDEO_TAIL_MS', '700'))
 const ONLY = env('CASE_CODES', '').split(',').map((value) => value.trim()).filter(Boolean)
 
 const goals = readJson(GOALS_FILE, {})
@@ -237,6 +239,7 @@ function evidenceOf(spec, verdict) {
     webmcp_dialog: execution.dialog ?? null,
     webmcp_confirmation_requested: spec.confirm === true,
     webmcp_tools_detected: execution.tools ?? [],
+    video: execution.video ?? null,
     elapsed_ms: execution.durationMs ?? null,
     // `url` alimente evidence_url côté base, sans capture d’écran.
     url: verdict.finalUrl || null,
@@ -369,11 +372,15 @@ try {
       confirm: spec.confirm,
       timeoutMs: spec.timeoutMs,
       waitMs: spec.waitMs,
+      videoDir: VIDEO_DIR,
+      videoName: `${c.code}.webm`,
+      videoTailMs: VIDEO_TAIL_MS,
     })
     verdict = verifyWebMcp(spec, execution)
 
     console.log(`  ${verdict.status.toUpperCase()} (${verdict.reason}) · ${execution.durationMs} ms · outil ${spec.tool}`)
     console.log(`  ${verdict.actual.slice(0, 700)}`)
+    if (execution.video) console.log(`  🎥 ${execution.video}`)
     results.push({
       code: c.code,
       title: c.title,
@@ -395,6 +402,10 @@ try {
 const counts = { passed: 0, failed: 0, blocked: 0, skipped: 0 }
 for (const result of results) counts[result.status] = (counts[result.status] ?? 0) + 1
 
+const videos = results
+  .map((result) => result.steps?.[0]?.evidence?.video)
+  .filter(Boolean)
+
 const payload = {
   run_id: env('QA_RUN_ID') || null,
   model: env('WEBMCP_REPORT_MODEL', 'playwright+webmcp'),
@@ -404,11 +415,13 @@ const payload = {
   duration_ms: results.reduce((sum, result) => sum + result.duration_ms, 0),
   cases: results,
   summary: counts,
+  videos,
 }
 
 mkdirSync(dirname(OUTPUT_FILE), { recursive: true })
 writeFileSync(OUTPUT_FILE, JSON.stringify(payload, null, 2))
 console.log(`\nRésultat écrit dans ${OUTPUT_FILE}`)
+if (videos.length) console.log(`${videos.length} vidéo(s) dans ${VIDEO_DIR}`)
 console.log(JSON.stringify(counts))
 
 const reportUrl = env('REPORT_URL')
