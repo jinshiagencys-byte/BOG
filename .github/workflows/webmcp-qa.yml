@@ -6,9 +6,15 @@ name: WebMCP QA — Playwright
 # exécute et vérifie le résultat avec ses propres assertions.
 # Aucun LLM, aucun Jev, aucune clé OpenCode : pas de budget à surveiller.
 #
-# Deux modes :
+# Deux familles de cas, exécutées par le même runner :
+#   • webmcp    — la page expose des outils, le runner les appelle ;
+#   • playwright — le cas décrit des actions déterministes (sites non
+#     instrumentés, comme odjafrik.com).
+#
+# Trois modes :
 #   • run réel  : manifest_url + run_token + report_url (déclenché par start-run) ;
-#   • démonstration : sans manifest_url, le workflow sert
+#   • manifeste local : manifest_file + cases_file, sans Supabase (sites réels) ;
+#   • démonstration : sans manifest_url ni manifest_file, le workflow sert
 #     .github/qa/fixtures/webmcp-demo.html et exécute
 #     .github/qa/webmcp-demo-manifest.json. C'est aussi le mode déclenché par
 #     un push sur les fichiers de démonstration.
@@ -36,8 +42,12 @@ on:
         description: "URL cible par défaut (facultative)"
         required: false
         type: string
+      manifest_file:
+        description: "Manifeste du dépôt à exécuter sans Supabase (ex. .github/qa/playwright-odjafrik-manifest.json)"
+        required: false
+        type: string
       cases_file:
-        description: "Catalogue des objectifs WebMCP"
+        description: "Catalogue des objectifs (WebMCP ou scénarios Playwright)"
         required: false
         default: ".github/qa/fastbrowse-cases.json"
         type: string
@@ -138,7 +148,7 @@ jobs:
           fi
 
       - name: Servir la page de démonstration
-        if: inputs.manifest_url == ''
+        if: inputs.manifest_url == '' && inputs.manifest_file == ''
         shell: bash
         run: |
           set -euo pipefail
@@ -160,9 +170,9 @@ jobs:
         env:
           NODE_PATH: ${{ runner.temp }}/qa-node/node_modules
           QA_ROOT: ${{ github.workspace }}
-          RUN_MANIFEST: ${{ inputs.manifest_url != '' && 'run_manifest.json' || '' }}
+          RUN_MANIFEST: ${{ inputs.manifest_url != '' && 'run_manifest.json' || inputs.manifest_file }}
           WEBMCP_DEMO_MANIFEST: ${{ github.workspace }}/.github/qa/webmcp-demo-manifest.json
-          WEBMCP_CASES: ${{ inputs.manifest_url != '' && format('{0}/{1}', github.workspace, inputs.cases_file) || format('{0}/.github/qa/webmcp-demo-cases.json', github.workspace) }}
+          WEBMCP_CASES: ${{ (inputs.manifest_url != '' || inputs.manifest_file != '') && format('{0}/{1}', github.workspace, inputs.cases_file) || format('{0}/.github/qa/webmcp-demo-cases.json', github.workspace) }}
           WEBMCP_PROBE_DIR: ${{ runner.temp }}/qa-node
           WEBMCP_STORAGE_STATE: ${{ steps.session.outputs.storage }}
           TARGET_URL: ${{ inputs.target_url || 'http://127.0.0.1:4173/webmcp-demo.html' }}

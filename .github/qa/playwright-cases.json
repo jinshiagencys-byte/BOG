@@ -1,0 +1,58 @@
+{
+  "TC-ODJ-SEARCH": {
+    "url": "https://odjafrik.com",
+    "label": "la recherche « Agonlin »",
+    "playwright": {
+      "waitMs": 1500,
+      "steps": [
+        { "action": "goto", "url": "https://odjafrik.com" },
+        { "action": "waitForText", "text": "Vendre sur Odjafrik", "timeoutMs": 20000 },
+        { "action": "wait", "ms": 2500 },
+        { "action": "fill", "placeholder": "Rechercher des produits, fournisseurs...", "value": "Agonlin" },
+        { "action": "wait", "ms": 300 },
+        { "action": "press", "placeholder": "Rechercher des produits, fournisseurs...", "key": "Enter" },
+        { "action": "waitForUrl", "pattern": "search=Agonlin", "timeoutMs": 25000 },
+        { "action": "waitForText", "text": "Agonlin", "timeoutMs": 25000 }
+      ],
+      "expect": {
+        "url": "/products\\?search=Agonlin",
+        "text": ["produits trouvés", "Agonlin", "FCFA"],
+        "failIfText": ["Aucun produit"]
+      }
+    }
+  },
+  "TC-ODJ-PRODUCT": {
+    "url": "https://odjafrik.com/product/35634176-4386-440f-9708-af9bfd1caac7",
+    "label": "la fiche produit « Les merveilles d’Agonlin »",
+    "playwright": {
+      "waitMs": 1500,
+      "steps": [
+        { "action": "goto", "url": "https://odjafrik.com/product/35634176-4386-440f-9708-af9bfd1caac7" },
+        { "action": "waitForText", "text": "En stock", "timeoutMs": 25000 },
+        { "action": "waitForText", "text": "FCFA", "timeoutMs": 15000 }
+      ],
+      "expect": {
+        "url": "/product/",
+        "text": ["Agonlin", "15,000 FCFA", "En stock", "Ajouter"],
+        "failIfText": ["Produit introuvable", "404"]
+      }
+    }
+  },
+  "TC-ODJ-CATALOG": {
+    "url": "https://odjafrik.com/products",
+    "label": "le catalogue produits",
+    "playwright": {
+      "waitMs": 1500,
+      "steps": [
+        { "action": "goto", "url": "https://odjafrik.com/products" },
+        { "action": "waitForText", "text": "Tous les produits", "timeoutMs": 25000 },
+        { "action": "waitForText", "text": "Trier par", "timeoutMs": 15000 }
+      ],
+      "expect": {
+        "url": "/products",
+        "text": ["Tous les produits", "Trier par", "produits trouvés"],
+        "failIfText": ["Une erreur est survenue"]
+      }
+    }
+  }
+}

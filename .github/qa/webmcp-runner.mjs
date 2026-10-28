@@ -22,6 +22,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { openProbe } from './page-probe.mjs'
 import { runWebMcpTool } from './webmcp-executor.mjs'
+import { runPlaywrightScenario } from './playwright-executor.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
@@ -103,21 +104,44 @@ if (!cases.length) {
   process.exit(2)
 }
 
+// Deux familles de cas :
+//   • webmcp    — la page expose l’outil, on l’exécute ;
+//   • playwright — on rejoue une suite d’actions déterministes sur un site réel.
 function specFor(c) {
   const configured = goals[c.code]
-  const spec = configured?.webmcp
-  if (!spec?.tool) return null
-  return {
-    tool: spec.tool,
-    args: spec.args ?? {},
-    confirm: spec.confirm === true,
-    waitMs: spec.waitMs,
-    timeoutMs: spec.timeoutMs,
-    url: expandEnv(spec.url || configured.webmcpUrl || configured.url || TARGET_URL),
-    storageState: expandEnv(spec.storageState ?? configured.storageState ?? '') || null,
-    expect: spec.expect ?? {},
-    label: configured.label || `l’outil ${spec.tool}`,
+  if (!configured) return null
+
+  const webmcp = configured.webmcp
+  if (webmcp?.tool) {
+    return {
+      kind: 'webmcp',
+      tool: webmcp.tool,
+      args: webmcp.args ?? {},
+      confirm: webmcp.confirm === true,
+      waitMs: webmcp.waitMs,
+      timeoutMs: webmcp.timeoutMs,
+      url: expandEnv(webmcp.url || configured.webmcpUrl || configured.url || TARGET_URL),
+      storageState: expandEnv(webmcp.storageState ?? configured.storageState ?? '') || null,
+      expect: webmcp.expect ?? {},
+      label: configured.label || `l’outil ${webmcp.tool}`,
+    }
   }
+
+  const scenario = configured.playwright
+  if (scenario?.steps?.length) {
+    return {
+      kind: 'playwright',
+      steps: scenario.steps,
+      waitMs: scenario.waitMs,
+      timeoutMs: scenario.timeoutMs,
+      url: expandEnv(scenario.url || configured.url || TARGET_URL),
+      storageState: expandEnv(scenario.storageState ?? configured.storageState ?? '') || null,
+      expect: scenario.expect ?? configured.expect ?? {},
+      label: configured.label || `le scénario ${c.code}`,
+    }
+  }
+
+  return null
 }
 
 function verifyWebMcp(spec, execution) {
@@ -226,8 +250,111 @@ function verifyWebMcp(spec, execution) {
   }
 }
 
+function verifyPlaywright(spec, execution) {
+  const text = String(execution.text ?? '')
+  const url = execution.url ?? ''
+  const expect = spec.expect ?? {}
+  const textChecks = (expect.text ?? []).map((pattern) => ({
+    pattern,
+    ok: new RegExp(pattern, 'i').test(text),
+  }))
+  const negativeChecks = (expect.failIfText ?? []).map((pattern) => ({
+    pattern,
+    matched: new RegExp(pattern, 'i').test(text),
+  }))
+  const negative = negativeChecks.find((check) => check.matched)?.pattern ?? null
+  const urlOk = !expect.url || new RegExp(expect.url, 'i').test(url)
+  const missingTexts = textChecks.filter((check) => !check.ok).map((check) => check.pattern)
+  const excerpt = cleanText(text, 1200)
+  const label = spec.label || 'le scénario'
+  const error = cleanText(execution.error, 500)
+  const networkLike = /net::|econn|err_|failed to load|timeout/i.test(error)
+  const actions = execution.steps ?? []
+
+  let status = 'passed'
+  let reason = 'scenario'
+  let actual = `Attendu observé : ${label}. ${actions.length} action(s) Playwright en ${formatMs(execution.durationMs)} sur ${url}.`
+
+  if (!execution.available) {
+    status = 'blocked'
+    reason = 'probe-unavailable'
+    actual = `Navigateur indisponible : ${error || 'raison inconnue'}.`
+  } else if (!execution.ok) {
+    status = networkLike ? 'blocked' : 'failed'
+    reason = networkLike ? 'network' : 'step-failed'
+    actual = `Le scénario a échoué : ${error}. Dernière URL : ${url || 'aucune'}.`
+  } else if (negative) {
+    status = 'failed'
+    reason = 'negative-evidence'
+    actual = `La page contient « ${negative} » au lieu de ${label}. URL : ${url}. Extrait : « ${excerpt} ».`
+  } else if (missingTexts.length) {
+    status = 'failed'
+    reason = 'content-missing'
+    actual = `Le texte attendu (${label}) est absent : ${missingTexts.map((pattern) => `« ${pattern} »`).join(', ')}. URL : ${url}. Extrait : « ${excerpt} ».`
+  } else if (!urlOk) {
+    status = 'failed'
+    reason = 'expectation-mismatch'
+    actual = `Le scénario s’est terminé sur ${url}, qui ne correspond pas à « ${expect.url} ». Extrait : « ${excerpt} ».`
+  }
+
+  if (status === 'passed') {
+    actual += textChecks.length
+      ? ` Vérifié : ${textChecks.map((check) => `« ${check.pattern} »`).join(', ')}.`
+      : ' Aucune assertion de texte demandée.'
+  }
+
+  return {
+    status,
+    reason,
+    urlOk,
+    textOk: textChecks.every((check) => check.ok),
+    textChecks,
+    negativeChecks,
+    hasNegativeEvidence: Boolean(negative),
+    cancelled: false,
+    pages: url ? [{ url, title: label, excerpt }] : [],
+    finalUrl: url,
+    excerpt,
+    missingTexts,
+    actual,
+    execution,
+  }
+}
+
 function evidenceOf(spec, verdict) {
   const execution = verdict.execution ?? {}
+  if (spec.kind === 'playwright') {
+    return {
+      engine: 'playwright',
+      playwright_status: verdict.status,
+      playwright_reason: verdict.reason,
+      playwright_error: execution.error ?? null,
+      playwright_actions: (execution.steps ?? []).map((step) => ({
+        n: step.n,
+        action: step.action,
+        target: step.target,
+        ok: step.ok,
+        ms: step.ms,
+        error: step.error ?? null,
+      })),
+      video: execution.video ?? null,
+      elapsed_ms: execution.durationMs ?? null,
+      url: verdict.finalUrl || null,
+      final_url: verdict.finalUrl || null,
+      expectations: spec.expect ?? {},
+      url_ok: verdict.urlOk,
+      text_ok: verdict.textOk,
+      text_checks: verdict.textChecks,
+      negative_checks: verdict.negativeChecks,
+      actual: verdict.actual,
+      excerpt: verdict.excerpt,
+      pages: verdict.pages.slice(-3).map((page) => ({
+        url: page.url,
+        title: page.title,
+        excerpt: String(page.excerpt ?? '').slice(0, 2500),
+      })),
+    }
+  }
   return {
     engine: 'webmcp',
     webmcp_tool: spec.tool,
@@ -262,9 +389,11 @@ function evidenceOf(spec, verdict) {
 function stepResults(c, verdict, spec) {
   const steps = c.steps.length
     ? c.steps
-    : [{ n: 1, action: c.title, expected: 'L’outil WebMCP répond comme attendu' }]
+    : [{ n: 1, action: c.title, expected: 'Le comportement attendu est observé' }]
   const evidence = evidenceOf(spec, verdict)
-  const executed = `Outil WebMCP « ${spec.tool} » exécuté sur ${verdict.finalUrl || 'une URL inconnue'} en ${formatMs(verdict.execution?.durationMs)}.`
+  const executed = spec.kind === 'playwright'
+    ? `Scénario Playwright exécuté sur ${verdict.finalUrl || 'une URL inconnue'} en ${formatMs(verdict.execution?.durationMs)} (${(verdict.execution?.steps ?? []).length} action(s)).`
+    : `Outil WebMCP « ${spec.tool} » exécuté sur ${verdict.finalUrl || 'une URL inconnue'} en ${formatMs(verdict.execution?.durationMs)}.`
 
   return steps.map((step, i) => {
     let status = 'passed'
@@ -308,7 +437,7 @@ function stepResults(c, verdict, spec) {
 function blockedVerdict(message) {
   return {
     status: 'blocked',
-    reason: 'not-webmcp',
+    reason: 'not-instrumented',
     urlOk: false,
     textOk: false,
     textChecks: [],
@@ -328,7 +457,7 @@ const startedAt = new Date()
 const results = []
 const probeBrowser = await openProbe(env('WEBMCP_PROBE_DIR', process.cwd()))
 if (probeBrowser.available) {
-  console.log(`\n🎭 WebMCP + Playwright (${probeBrowser.executablePath})`)
+  console.log(`\n🎭 Playwright + WebMCP (${probeBrowser.executablePath})`)
 } else {
   console.log(`\n⚠ Navigateur indisponible : ${probeBrowser.reason}`)
 }
@@ -345,9 +474,9 @@ try {
     let verdict
     if (!spec) {
       verdict = blockedVerdict(
-        `Aucun objectif WebMCP pour ${c.code}. Ce workflow n’exécute que des cas instrumentés.`,
+        `Aucun objectif WebMCP ou Playwright pour ${c.code}. Ce workflow n’exécute que des cas instrumentés.`,
       )
-      console.log(`  BLOCKED (not-webmcp) · ${verdict.actual}`)
+      console.log(`  BLOCKED (not-instrumented) · ${verdict.actual}`)
       results.push({
         code: c.code,
         title: c.title,
@@ -359,26 +488,43 @@ try {
         status: verdict.status,
         note: verdict.actual.slice(0, 4000),
         duration_ms: 0,
-        steps: stepResults(c, verdict, { tool: null, args: {}, expect: {} }),
+        steps: stepResults(c, verdict, { kind: 'webmcp', tool: null, args: {}, expect: {} }),
       })
       continue
     }
 
-    const execution = await runWebMcpTool(probeBrowser, {
-      url: spec.url,
-      tool: spec.tool,
-      args: spec.args,
-      storageState: spec.storageState,
-      confirm: spec.confirm,
-      timeoutMs: spec.timeoutMs,
-      waitMs: spec.waitMs,
-      videoDir: VIDEO_DIR,
-      videoName: `${c.code}.webm`,
-      videoTailMs: VIDEO_TAIL_MS,
-    })
-    verdict = verifyWebMcp(spec, execution)
+    const execution = spec.kind === 'webmcp'
+      ? await runWebMcpTool(probeBrowser, {
+          url: spec.url,
+          tool: spec.tool,
+          args: spec.args,
+          storageState: spec.storageState,
+          confirm: spec.confirm,
+          timeoutMs: spec.timeoutMs,
+          waitMs: spec.waitMs,
+          videoDir: VIDEO_DIR,
+          videoName: `${c.code}.webm`,
+          videoTailMs: VIDEO_TAIL_MS,
+        })
+      : await runPlaywrightScenario(probeBrowser, {
+          url: spec.url,
+          steps: spec.steps,
+          storageState: spec.storageState,
+          timeoutMs: spec.timeoutMs,
+          waitMs: spec.waitMs,
+          videoDir: VIDEO_DIR,
+          videoName: `${c.code}.webm`,
+          videoTailMs: VIDEO_TAIL_MS,
+        })
 
-    console.log(`  ${verdict.status.toUpperCase()} (${verdict.reason}) · ${execution.durationMs} ms · outil ${spec.tool}`)
+    verdict = spec.kind === 'webmcp'
+      ? verifyWebMcp(spec, execution)
+      : verifyPlaywright(spec, execution)
+
+    const executorLabel = spec.kind === 'webmcp'
+      ? `outil ${spec.tool}`
+      : `scénario ${spec.steps.length} actions`
+    console.log(`  ${verdict.status.toUpperCase()} (${verdict.reason}) · ${execution.durationMs} ms · ${executorLabel}`)
     console.log(`  ${verdict.actual.slice(0, 700)}`)
     if (execution.video) console.log(`  🎥 ${execution.video}`)
     results.push({
