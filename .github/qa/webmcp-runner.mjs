@@ -270,6 +270,8 @@ function verifyPlaywright(spec, execution) {
   const error = cleanText(execution.error, 500)
   const networkLike = /net::|econn|err_|failed to load|timeout/i.test(error)
   const actions = execution.steps ?? []
+  const httpErrors = Array.isArray(execution.httpErrors) ? execution.httpErrors : []
+  const rateLimited = httpErrors.filter((item) => item.status === 429)
 
   let status = 'passed'
   let reason = 'scenario'
@@ -279,6 +281,12 @@ function verifyPlaywright(spec, execution) {
     status = 'blocked'
     reason = 'probe-unavailable'
     actual = `Navigateur indisponible : ${error || 'raison inconnue'}.`
+  } else if (rateLimited.length) {
+    // Le quota de l'API n'est pas un défaut du produit : on ne le compte pas
+    // comme un échec, mais le cas n'a pas pu être vérifié.
+    status = 'blocked'
+    reason = 'rate-limited'
+    actual = `Le site a répondu 429 (quota) sur ${rateLimited.length} requête(s), dont ${rateLimited[0].url}. Le cas n’a pas pu être vérifié.`
   } else if (!execution.ok) {
     status = networkLike ? 'blocked' : 'failed'
     reason = networkLike ? 'network' : 'step-failed'
@@ -329,6 +337,7 @@ function evidenceOf(spec, verdict) {
       playwright_status: verdict.status,
       playwright_reason: verdict.reason,
       playwright_error: execution.error ?? null,
+      playwright_http_errors: execution.httpErrors ?? [],
       playwright_actions: (execution.steps ?? []).map((step) => ({
         n: step.n,
         action: step.action,

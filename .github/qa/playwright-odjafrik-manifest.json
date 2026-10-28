@@ -18,6 +18,16 @@
       ]
     },
     {
+      "code": "TC-ODJ-EMPTY-SEARCH",
+      "title": "Recherche sans résultat : état vide",
+      "suite": "Odjafrik",
+      "steps": [
+        { "n": 1, "action": "Ouvrir https://odjafrik.com", "expected": "La page d’accueil s’affiche" },
+        { "n": 2, "action": "Saisir « zzzzznope » puis Entrée", "expected": "La recherche est lancée" },
+        { "n": 3, "action": "Attendre l’état vide", "expected": "« Aucun produit trouvé » s’affiche sans erreur" }
+      ]
+    },
+    {
       "code": "TC-ODJ-PRODUCT",
       "title": "Vérifier une fiche produit",
       "suite": "Odjafrik",
@@ -33,6 +43,33 @@
       "steps": [
         { "n": 1, "action": "Ouvrir https://odjafrik.com/products", "expected": "Le catalogue s’affiche" },
         { "n": 2, "action": "Vérifier les contrôles de liste", "expected": "Les filtres et le tri sont présents" }
+      ]
+    },
+    {
+      "code": "TC-ODJ-SELLERS",
+      "title": "Ouvrir l’annuaire des vendeurs",
+      "suite": "Odjafrik",
+      "steps": [
+        { "n": 1, "action": "Ouvrir https://odjafrik.com/sellers", "expected": "L’annuaire s’affiche" },
+        { "n": 2, "action": "Vérifier le compteur et la recherche", "expected": "Le nombre de vendeurs et le champ de recherche sont visibles" }
+      ]
+    },
+    {
+      "code": "TC-ODJ-ARTISANS",
+      "title": "Ouvrir l’annuaire des artisans",
+      "suite": "Odjafrik",
+      "steps": [
+        { "n": 1, "action": "Ouvrir https://odjafrik.com/artisans", "expected": "L’annuaire s’affiche" },
+        { "n": 2, "action": "Vérifier les fiches artisans", "expected": "Au moins un profil est proposé" }
+      ]
+    },
+    {
+      "code": "TC-ODJ-ANNONCES",
+      "title": "Ouvrir les annonces des artisans",
+      "suite": "Odjafrik",
+      "steps": [
+        { "n": 1, "action": "Ouvrir https://odjafrik.com/annonces", "expected": "La liste des annonces s’affiche" },
+        { "n": 2, "action": "Vérifier une annonce et sa catégorie", "expected": "Une annonce de stylisme est visible" }
       ]
     }
   ]

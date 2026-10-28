@@ -122,9 +122,18 @@ export async function runPlaywrightScenario(probe, options) {
   const page = await context.newPage()
   const video = page.video()
   const log = []
+  const httpErrors = []
   let failure = null
   let text = ''
   let finalUrl = ''
+
+  // Un 429 n'est pas un bug du site : c'est le quota de l'API. On le remonte
+  // pour que le verdict soit `blocked`, pas `failed`.
+  page.on('response', (response) => {
+    if (response.status() < 400) return
+    if (httpErrors.length >= 30) return
+    httpErrors.push({ status: response.status(), url: response.url().slice(0, 300) })
+  })
 
   try {
     const deadline = Date.now() + Number(timeoutMs) * Math.max(steps.length, 1)
@@ -186,6 +195,7 @@ export async function runPlaywrightScenario(probe, options) {
     url: finalUrl,
     text,
     steps: log,
+    httpErrors,
     error: failure,
     durationMs: Math.round(performance.now() - started),
     video: videoPath,

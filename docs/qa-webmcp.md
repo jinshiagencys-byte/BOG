@@ -95,17 +95,21 @@ Les sites qui hydratent leur interface en JavaScript demandent une attente aprè
 un `fill` immédiat peut remplir un champ avant que le gestionnaire `Enter` soit attaché.
 
 Le jeu odjafrik vit dans `.github/qa/playwright-cases.json` et
-`.github/qa/playwright-odjafrik-manifest.json` (recherche « Agonlin », fiche produit,
-catalogue). Pour le lancer en CI : `manifest_file` = le manifeste, `cases_file` = le
-catalogue.
+`.github/qa/playwright-odjafrik-manifest.json` : recherche « Agonlin », recherche sans
+résultat, fiche produit, catalogue, vendeurs, artisans, annonces. Pour le lancer en CI :
+`manifest_file` = le manifeste, `cases_file` = le catalogue.
+
+Un `429` renvoyé par l'API du site donne `blocked / rate-limited` : c'est un quota, pas un
+défaut produit. Les autres erreurs HTTP restent des échecs. Le runner expose aussi
+`playwright_http_errors` dans la preuve.
 
 ## Verdicts
 
 - `passed` : toutes les assertions passent.
 - `failed` : texte attendu absent, texte interdit présent, tool en erreur, mutation non
   refusée, confirmation manquante ou refusée sans que le cas l'attende.
-- `blocked` : navigateur indisponible, outil non exposé, erreur réseau ou cas non
-  instrumenté.
+- `blocked` : navigateur indisponible, outil non exposé, erreur réseau, quota API (429) ou cas
+  non instrumenté.
 - `skipped` : étape non exécutée après un échec.
 
 ## Vidéos
