@@ -171,8 +171,14 @@ jobs:
           node .github/qa/webmcp-runner.mjs
           CODE=$?
           echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
-          if [ "$CODE" -ne 0 ]; then
-            echo "::warning::Le runner WebMCP s'est terminé avec le code $CODE"
+          # 0 = cas exécutés, 1 = rapport refusé, 2 = configuration invalide.
+          # Un échec de cas ne fait pas échouer le job : le verdict est dans
+          # qa_result.json. Une erreur de configuration, si.
+          if [ "$CODE" -eq 1 ]; then
+            echo "::warning::Le rapport QA a été refusé (code 1)"
+          elif [ "$CODE" -ne 0 ]; then
+            echo "::error::Le runner WebMCP s'est arrêté avec le code $CODE"
+            exit "$CODE"
           fi
 
       - name: Archiver les preuves QA

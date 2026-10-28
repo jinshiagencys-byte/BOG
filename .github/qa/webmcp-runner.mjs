@@ -53,7 +53,8 @@ function formatMs(ms) {
 }
 
 const ROOT = resolve(env('QA_ROOT', join(HERE, '..', '..')))
-const MANIFEST_PATH = env('RUN_MANIFEST', env('WEBMCP_DEMO_MANIFEST', ''))
+// Une variable définie mais vide (workflow_dispatch sans manifeste) vaut absente.
+const MANIFEST_PATH = env('RUN_MANIFEST') || env('WEBMCP_DEMO_MANIFEST')
 const MANIFEST_FILE = MANIFEST_PATH ? resolve(MANIFEST_PATH) : ''
 const GOALS_FILE = resolve(env('WEBMCP_CASES', join(HERE, 'fastbrowse-cases.json')))
 const OUTPUT_FILE = resolve(env('QA_OUTPUT', join(ROOT, 'qa_result.json')))
