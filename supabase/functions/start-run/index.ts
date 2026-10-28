@@ -186,6 +186,7 @@ Deno.serve(async (req) => {
   // Les preuves vidéo ne concernent que l'exécuteur Playwright/WebMCP.
   if (executor === 'webmcp') {
     inputs.evidence_upload_url = `${supabaseUrl}/functions/v1/upload-evidence`;
+    inputs.profile_save_url = `${supabaseUrl}/functions/v1/save-site-profile`;
   }
   if (executor === 'antigravity') inputs.model = model;
 

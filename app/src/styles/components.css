@@ -2166,6 +2166,29 @@ span.td-tc-status-pill {
   color: hsl(var(--muted-foreground));
 }
 
+.td-run-schema {
+  margin: 0.625rem 0 0 1.625rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.5rem;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: hsl(var(--foreground) / 0.85);
+}
+.td-run-schema b {
+  display: block;
+  font-weight: 500;
+  color: hsl(var(--foreground));
+}
+.td-run-schema ul {
+  margin: 0.25rem 0 0;
+  padding-left: 1rem;
+  list-style: disc;
+}
+.td-run-schema li + li {
+  margin-top: 0.125rem;
+}
+
 .td-linked-runs {
   display: grid;
   gap: 0.5rem;

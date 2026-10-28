@@ -19,7 +19,9 @@ const TABS = [
 ]
 
 function hasEvidence(step) {
-  return Boolean(step?.evidenceUrl || step?.evidence?.video_path)
+  return Boolean(
+    step?.evidenceUrl || step?.evidence?.video_path || step?.evidence?.enriched,
+  )
 }
 
 function EvidenceVideo({ path }) {
@@ -61,6 +63,9 @@ function ResultCard({ item, failed, proofOpen, onProof, acked, onAck }) {
   const label = item.code || item.id
   const videoPath = steps.find((step) => step.evidence?.video_path)?.evidence?.video_path || null
   const proofable = steps.some(hasEvidence)
+  const enriched = steps.map((step) => step.evidence?.enriched).find(Boolean) || null
+  const schema = Array.isArray(enriched?.checks) ? enriched.checks : []
+  const siteProfile = steps.map((step) => step.evidence?.site_profile).find(Boolean) || null
 
   return (
     <article className={'td-run-case' + (failed ? ' is-failed' : ' is-passed')}>
@@ -81,20 +86,50 @@ function ResultCard({ item, failed, proofOpen, onProof, acked, onAck }) {
               'Test validé : tous les critères attendus ont été vérifiés.'}
         </p>
 
+        {proofOpen && siteProfile ? (
+          <p className="td-run-video-note">
+            Profil du site : {siteProfile.products || 0} donnée
+            {siteProfile.products === 1 ? '' : 's'} observée
+            {siteProfile.products === 1 ? '' : 's'}
+            {siteProfile.captured_at
+              ? ` · exploré le ${new Date(siteProfile.captured_at).toLocaleDateString('fr-FR')}`
+              : ''}
+            {siteProfile.status && siteProfile.status !== 'ready'
+              ? ` · exploration ${siteProfile.status}`
+              : ''}
+          </p>
+        ) : null}
+
+        {proofOpen && schema.length ? (
+          <div className="td-run-schema">
+            <b>Ce qui devait être vérifié</b>
+            <ul>
+              {schema.map((check, index) => (
+                <li key={`${check}-${index}`}>{check}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+
         {proofOpen ? (
           <ol className="td-run-proof">
-            {steps.map((step, index) => (
-              <li key={step.id || `${step.action}-${index}`}>
-                <b>{step.action}</b>
-                <span>{step.expected}</span>
-                {step.actual ? <em>Observé : {step.actual}</em> : null}
-                {step.evidenceUrl ? (
-                  <a href={step.evidenceUrl} target="_blank" rel="noreferrer">
-                    Voir la page testée
-                  </a>
-                ) : null}
-              </li>
-            ))}
+            {steps.map((step, index) => {
+              const enrichedStep = step.evidence?.enriched?.steps?.[index]
+              const action = enrichedStep?.action || step.action
+              const expected = enrichedStep?.expected || step.expected
+              return (
+                <li key={step.id || `${action}-${index}`}>
+                  <b>{action}</b>
+                  <span>{expected}</span>
+                  {step.actual ? <em>Observé : {step.actual}</em> : null}
+                  {step.evidenceUrl ? (
+                    <a href={step.evidenceUrl} target="_blank" rel="noreferrer">
+                      Voir la page testée
+                    </a>
+                  ) : null}
+                </li>
+              )
+            })}
           </ol>
         ) : null}
 

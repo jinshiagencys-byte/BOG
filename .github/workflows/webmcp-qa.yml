@@ -4,7 +4,8 @@ name: WebMCP QA — Playwright
 #
 # Playwright ouvre Chrome, la page expose ses outils WebMCP, le runner les
 # exécute et vérifie le résultat avec ses propres assertions.
-# Aucun LLM, aucun Jev, aucune clé OpenCode : pas de budget à surveiller.
+# Un plan LLM facultatif décrit ce qu'il faut vérifier (schéma), mais il ne
+# fournit ni sélecteur ni script : le scénario exécuté reste déterministe.
 #
 # Deux familles de cas, exécutées par le même runner :
 #   • webmcp    — la page expose des outils, le runner les appelle ;
@@ -40,6 +41,10 @@ on:
         type: string
       evidence_upload_url:
         description: "URL de l'Edge Function upload-evidence (vidéos, facultative)"
+        required: false
+        type: string
+      profile_save_url:
+        description: "URL de l'Edge Function save-site-profile (profil d'exploration, facultative)"
         required: false
         type: string
       target_url:
@@ -185,6 +190,11 @@ jobs:
           REPORT_URL: ${{ inputs.report_url }}
           RUN_TOKEN: ${{ inputs.run_token }}
           EVIDENCE_UPLOAD_URL: ${{ inputs.evidence_upload_url }}
+          PROFILE_SAVE_URL: ${{ inputs.profile_save_url }}
+          WEBMCP_PLAN: auto
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          OPENCODE_BASE_URL: https://opencode.ai/inference/openai/v1
+          OPENCODE_MODEL: deepseek-v4.1-flash
           WEBMCP_DELAY_MS: "0"
           WEBMCP_VIDEO_DIR: ${{ github.workspace }}/qa-videos
           WEBMCP_VIDEO_TAIL_MS: "700"

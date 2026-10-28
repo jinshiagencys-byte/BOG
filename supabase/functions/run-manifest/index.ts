@@ -34,12 +34,37 @@ Deno.serve(async (req) => {
 
   const { data: run, error: runError } = await service
     .from('test_runs')
-    .select('id, status, manifest')
+    .select('id, site_id, status, manifest')
     .eq('id', runId)
     .maybeSingle();
 
   if (runError) return fail('RUN_QUERY_FAILED', 500, runError.message);
   if (!run?.manifest) return fail('RUN_NOT_FOUND', 404);
 
-  return json(run.manifest);
+  // Le profil d'exploration accompagne le manifeste quand il est encore frais
+  // (moins de sept jours). Sinon le runner explore lui-même avant d'exécuter.
+  const { data: profileRow } = await service
+    .from('site_profiles')
+    .select('version, profile, enrichments, captured_at, expires_at, status, source')
+    .eq('site_id', run.site_id)
+    .maybeSingle();
+
+  const fresh =
+    profileRow != null && new Date(profileRow.expires_at).getTime() > Date.now();
+
+  return json({
+    ...run.manifest,
+    profile: fresh ? profileRow.profile : null,
+    enrichments: fresh ? profileRow.enrichments : {},
+    profile_meta: profileRow
+      ? {
+          version: profileRow.version,
+          captured_at: profileRow.captured_at,
+          expires_at: profileRow.expires_at,
+          status: profileRow.status,
+          source: profileRow.source,
+          fresh,
+        }
+      : null,
+  });
 });

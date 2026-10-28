@@ -21,6 +21,10 @@ verify_jwt = false
 [functions.upload-evidence]
 verify_jwt = false
 
+# Profil d'exploration du site, enregistré par le runner avec x-run-token.
+[functions.save-site-profile]
+verify_jwt = false
+
 # Appelée par pg_cron avec x-purge-secret, jamais par le navigateur.
 [functions.purge-evidence]
 verify_jwt = false

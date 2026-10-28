@@ -23,6 +23,9 @@ import { fileURLToPath } from 'node:url'
 import { openProbe } from './page-probe.mjs'
 import { runWebMcpTool } from './webmcp-executor.mjs'
 import { runPlaywrightScenario } from './playwright-executor.mjs'
+import { exploreSite, parsePrice } from './site-explorer.mjs'
+import { enrichCases } from './case-enricher.mjs'
+import { planCases } from './case-planner.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
@@ -97,7 +100,40 @@ const CASE_DELAY_MS = Number(env('WEBMCP_DELAY_MS', '0'))
 const VIDEO_DIR = env('WEBMCP_VIDEO_DIR') ? resolve(env('WEBMCP_VIDEO_DIR')) : null
 const VIDEO_TAIL_MS = Number(env('WEBMCP_VIDEO_TAIL_MS', '700'))
 const EVIDENCE_UPLOAD_URL = env('EVIDENCE_UPLOAD_URL')
+const PROFILE_SAVE_URL = env('PROFILE_SAVE_URL')
+const EXPLORE_MODE = env('WEBMCP_EXPLORE', 'auto')
 const RUN_TOKEN = env('RUN_TOKEN')
+// Session optionnelle (site derrière une connexion) : les cas et
+// l'exploration doivent voir le même état.
+const DEFAULT_STORAGE_STATE = expandEnv(env('WEBMCP_STORAGE_STATE')) || null
+// Plan LLM : schéma de ce qui sera vérifié. Il ne fournit ni sélecteur ni
+// script ; le scénario exécuté reste déterministe.
+const PLAN_MODE = env('WEBMCP_PLAN', 'auto')
+
+function planProvider() {
+  if (env('WEBMCP_PLAN_ENDPOINT')) {
+    return {
+      endpoint: env('WEBMCP_PLAN_ENDPOINT'),
+      key: env('WEBMCP_PLAN_KEY') || env('OPENCODE_API_KEY') || env('OPENROUTER_API_KEY'),
+      model: env('WEBMCP_PLAN_MODEL', 'deepseek-v4.1-flash'),
+    }
+  }
+  if (env('OPENCODE_API_KEY')) {
+    return {
+      endpoint: env('OPENCODE_BASE_URL', 'https://opencode.ai/inference/openai/v1'),
+      key: env('OPENCODE_API_KEY'),
+      model: env('OPENCODE_MODEL', 'deepseek-v4.1-flash'),
+    }
+  }
+  if (env('OPENROUTER_API_KEY')) {
+    return {
+      endpoint: env('OPENROUTER_BASE_URL', 'https://openrouter.ai/api/v1'),
+      key: env('OPENROUTER_API_KEY'),
+      model: env('OPENROUTER_MODEL', 'deepseek/deepseek-chat-v3.1:free'),
+    }
+  }
+  return null
+}
 const ONLY = env('CASE_CODES', '').split(',').map((value) => value.trim()).filter(Boolean)
 
 const goals = readJson(GOALS_FILE, {})
@@ -139,14 +175,121 @@ if (!cases.length) {
   process.exit(2)
 }
 
+// Profil d'exploration : fourni par le manifeste s'il a moins de sept jours,
+// sinon construit ici avant d'exécuter. Les cas sans objectif explicite en
+// dérivent un scénario concret (vrais produits, vrais prix, vrais libellés).
+let profile = manifest.profile && typeof manifest.profile === 'object' && !Array.isArray(manifest.profile)
+  ? manifest.profile
+  : null
+let enrichments = manifest.enrichments && typeof manifest.enrichments === 'object' && !Array.isArray(manifest.enrichments)
+  ? manifest.enrichments
+  : {}
+const profileMeta = manifest.profile_meta ?? null
+let generatedSpecs = {}
+let overlays = {}
+
+function applyEnrichments({ rebuild = false, llmPlan = null } = {}) {
+  if (!profile) return
+  const result = enrichCases({ profile, cases, llmPlan })
+  generatedSpecs = result.specs
+  // Une exploration fraîche remplace les enrichissements ; un profil réutilisé
+  // garde ceux qui ont été enregistrés avec lui (mêmes faits, même version).
+  if (rebuild || !Object.keys(enrichments).length) enrichments = result.overlays
+  overlays = enrichments
+  for (const c of cases) {
+    const overlay = overlays[c.code]
+    if (!overlay?.steps?.length) continue
+    c.originalSteps = c.steps
+    c.steps = overlay.steps.map((step, index) => ({
+      n: index + 1,
+      action: step.action ?? '',
+      expected: step.expected ?? '',
+    }))
+    c.enriched = true
+  }
+  if (result.skipped.length) {
+    console.log(
+      `  ${result.skipped.length} cas sans données suffisantes : ${result.skipped
+        .map((item) => item.code)
+        .join(', ')}`,
+    )
+  }
+}
+
+/** Demande au LLM un schéma de vérification, à partir des faits observés. */
+async function planFor(siteProfile) {
+  if (PLAN_MODE === 'off') return null
+  const provider = planProvider()
+  if (!provider?.key) {
+    if (PLAN_MODE === 'on') console.log('  ⚠ plan LLM demandé mais aucune clé disponible')
+    return null
+  }
+  try {
+    const result = await planCases({
+      profile: siteProfile,
+      cases,
+      endpoint: provider.endpoint,
+      apiKey: provider.key,
+      model: provider.model,
+    })
+    console.log(
+      `  🧠 plan LLM : ${Object.keys(result.plan).length} cas (${result.model})`,
+    )
+    return result.plan
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    console.log(`  ⚠ plan LLM ignoré : ${message.slice(0, 200)}`)
+    return null
+  }
+}
+
+function explorationWanted() {
+  if (EXPLORE_MODE === 'off') return false
+  if (!/^https?:\/\//i.test(TARGET_URL)) return false
+  if (EXPLORE_MODE === 'force') return true
+  if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//i.test(TARGET_URL)) return false
+  const fresh = profileMeta?.fresh === true && profile
+  if (fresh && Object.keys(enrichments).length) return false
+  // Sans objectif explicite, le cas a besoin du profil pour exister.
+  return cases.some((c) => !goals[c.code])
+}
+
+/** Enregistre le profil et ses enrichissements. Un échec ne change pas le run. */
+async function saveSiteProfile(siteProfile, overlaySet, source = 'crawler') {
+  if (!PROFILE_SAVE_URL || !RUN_TOKEN || !siteProfile) return null
+  try {
+    const response = await fetch(PROFILE_SAVE_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-run-token': RUN_TOKEN },
+      body: JSON.stringify({
+        profile: siteProfile,
+        enrichments: overlaySet,
+        status: siteProfile.status,
+        source,
+        issues: siteProfile.issues ?? [],
+        error: null,
+      }),
+    })
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      console.log(`  ⚠ profil non enregistré : ${payload?.error ?? `HTTP ${response.status}`}`)
+      return null
+    }
+    return payload
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    console.log(`  ⚠ profil non enregistré : ${message.slice(0, 200)}`)
+    return null
+  }
+}
+
 // Deux familles de cas :
 //   • webmcp    — la page expose l’outil, on l’exécute ;
 //   • playwright — on rejoue une suite d’actions déterministes sur un site réel.
 function specFor(c) {
   const configured = goals[c.code]
-  if (!configured) return null
 
-  const webmcp = configured.webmcp
+  const webmcp = configured?.webmcp
   if (webmcp?.tool) {
     return {
       kind: 'webmcp',
@@ -156,13 +299,13 @@ function specFor(c) {
       waitMs: webmcp.waitMs,
       timeoutMs: webmcp.timeoutMs,
       url: expandEnv(webmcp.url || configured.webmcpUrl || configured.url || TARGET_URL),
-      storageState: expandEnv(webmcp.storageState ?? configured.storageState ?? '') || null,
+      storageState: expandEnv(webmcp.storageState ?? configured.storageState ?? DEFAULT_STORAGE_STATE ?? '') || null,
       expect: webmcp.expect ?? {},
       label: configured.label || `l’outil ${webmcp.tool}`,
     }
   }
 
-  const scenario = configured.playwright
+  const scenario = configured?.playwright
   if (scenario?.steps?.length) {
     return {
       kind: 'playwright',
@@ -170,9 +313,24 @@ function specFor(c) {
       waitMs: scenario.waitMs,
       timeoutMs: scenario.timeoutMs,
       url: expandEnv(scenario.url || configured.url || TARGET_URL),
-      storageState: expandEnv(scenario.storageState ?? configured.storageState ?? '') || null,
+      storageState: expandEnv(scenario.storageState ?? configured.storageState ?? DEFAULT_STORAGE_STATE ?? '') || null,
       expect: scenario.expect ?? configured.expect ?? {},
       label: configured.label || `le scénario ${c.code}`,
+    }
+  }
+
+  // Cas sans objectif écrit à la main : le scénario vient du profil du site.
+  const generated = generatedSpecs[c.code]
+  if (generated) {
+    return {
+      kind: generated.kind ?? 'playwright',
+      steps: generated.steps ?? [],
+      expect: generated.expect ?? {},
+      label: generated.label || `le scénario ${c.code}`,
+      url: expandEnv(generated.url || profile?.site?.url || TARGET_URL),
+      storageState: expandEnv(generated.storageState ?? DEFAULT_STORAGE_STATE ?? '') || null,
+      waitMs: generated.waitMs,
+      timeoutMs: generated.timeoutMs,
     }
   }
 
@@ -274,6 +432,7 @@ function verifyWebMcp(spec, execution) {
     textOk: textChecks.every((check) => check.ok),
     textChecks,
     negativeChecks,
+    collectedChecks,
     hasNegativeEvidence: Boolean(negative),
     cancelled,
     finalUrl: url,
@@ -283,6 +442,38 @@ function verifyWebMcp(spec, execution) {
     actual,
     execution,
   }
+}
+
+/** Vérifications fonctionnelles : valeurs réellement collectées dans la page. */
+function checkCollected(expect, execution) {
+  const rules = expect.collected ?? {}
+  const collected = execution.collected ?? {}
+  const checks = []
+  for (const [name, rule] of Object.entries(rules)) {
+    const raw = collected[name]
+    const values = (Array.isArray(raw) ? raw : [])
+      .map((value) => (typeof value === 'number' ? value : parsePrice(String(value))))
+      .filter((value) => Number.isFinite(value) && value > 0)
+    const minCount = Number(rule.minCount ?? 1)
+    let ok = values.length >= minCount
+    if (ok && rule.ordered) {
+      ok = values.every((value, index) =>
+        index === 0
+          ? true
+          : rule.ordered === 'asc'
+            ? value >= values[index - 1]
+            : value <= values[index - 1],
+      )
+    }
+    checks.push({
+      name,
+      ok,
+      count: values.length,
+      ordered: rule.ordered ?? null,
+      values: values.slice(0, 12),
+    })
+  }
+  return checks
 }
 
 function verifyPlaywright(spec, execution) {
@@ -307,6 +498,10 @@ function verifyPlaywright(spec, execution) {
   const actions = execution.steps ?? []
   const httpErrors = Array.isArray(execution.httpErrors) ? execution.httpErrors : []
   const rateLimited = httpErrors.filter((item) => item.status === 429)
+  const collectedChecks = checkCollected(expect, execution)
+  const failedCollected = collectedChecks.find((check) => !check.ok) ?? null
+  const visibleChecks = Array.isArray(execution.visibleChecks) ? execution.visibleChecks : []
+  const hidden = visibleChecks.find((check) => check.found > 0 && (!check.visible || !check.inViewport)) ?? null
 
   let status = 'passed'
   let reason = 'scenario'
@@ -338,12 +533,29 @@ function verifyPlaywright(spec, execution) {
     status = 'failed'
     reason = 'expectation-mismatch'
     actual = `Le scénario s’est terminé sur ${url}, qui ne correspond pas à « ${expect.url} ». Extrait : « ${excerpt} ».`
+  } else if (hidden) {
+    status = 'failed'
+    reason = 'not-visible'
+    actual = `Le texte « ${hidden.pattern} » existe dans la page mais n’est pas visible à l’écran après défilement (trouvé : ${hidden.found}, visible : ${hidden.visible}, dans la fenêtre : ${hidden.inViewport}). URL : ${url}.`
+  } else if (failedCollected) {
+    status = 'failed'
+    reason = 'collected-check'
+    actual = `Vérification fonctionnelle échouée : ${failedCollected.name} attendait au moins ${
+      expect.collected?.[failedCollected.name]?.minCount ?? 1
+    } valeur(s)${failedCollected.ordered ? ` ordonnées (${failedCollected.ordered})` : ''}, obtenu ${
+      failedCollected.count
+    } (${failedCollected.values.join(', ') || 'aucune'}). URL : ${url}.`
   }
 
   if (status === 'passed') {
     actual += textChecks.length
       ? ` Vérifié : ${textChecks.map((check) => `« ${check.pattern} »`).join(', ')}.`
       : ' Aucune assertion de texte demandée.'
+    for (const check of collectedChecks.filter((item) => item.ok)) {
+      actual += ` ${check.name} : ${check.count} valeur(s)${
+        check.ordered ? ` ${check.ordered === 'asc' ? 'croissantes' : 'décroissantes'}` : ''
+      }.`
+    }
   }
 
   return {
@@ -353,6 +565,8 @@ function verifyPlaywright(spec, execution) {
     textOk: textChecks.every((check) => check.ok),
     textChecks,
     negativeChecks,
+    collectedChecks,
+    visibleChecks,
     hasNegativeEvidence: Boolean(negative),
     cancelled: false,
     pages: url ? [{ url, title: label, excerpt }] : [],
@@ -391,6 +605,8 @@ function evidenceOf(spec, verdict) {
       text_ok: verdict.textOk,
       text_checks: verdict.textChecks,
       negative_checks: verdict.negativeChecks,
+      collected_checks: verdict.collectedChecks ?? [],
+      visible_checks: verdict.visibleChecks ?? [],
       actual: verdict.actual,
       excerpt: verdict.excerpt,
       pages: verdict.pages.slice(-3).map((page) => ({
@@ -437,6 +653,24 @@ function stepResults(c, verdict, spec) {
     ? c.steps
     : [{ n: 1, action: c.title, expected: 'Le comportement attendu est observé' }]
   const evidence = evidenceOf(spec, verdict)
+  // Le schéma du plan (LLM + faits observés) accompagne la preuve : l’écran
+  // peut afficher ce qui devait être vérifié, même quand le cas est bloqué.
+  const overlay = overlays[c.code]
+  if (overlay) {
+    evidence.enriched = {
+      motif: overlay.motif,
+      planner: overlay.source,
+      checks: overlay.checks ?? [],
+      steps: overlay.steps ?? [],
+    }
+  }
+  if (profile) {
+    evidence.site_profile = {
+      status: profile.status ?? null,
+      captured_at: profile.captured_at ?? null,
+      products: Array.isArray(profile.products) ? profile.products.length : 0,
+    }
+  }
   const executed = spec.kind === 'playwright'
     ? `Scénario Playwright exécuté sur ${verdict.finalUrl || 'une URL inconnue'} en ${formatMs(verdict.execution?.durationMs)} (${(verdict.execution?.steps ?? []).length} action(s)).`
     : `Outil WebMCP « ${spec.tool} » exécuté sur ${verdict.finalUrl || 'une URL inconnue'} en ${formatMs(verdict.execution?.durationMs)}.`
@@ -508,6 +742,41 @@ if (probeBrowser.available) {
   console.log(`\n⚠ Navigateur indisponible : ${probeBrowser.reason}`)
 }
 
+// Exploration avant exécution : une fois par site, renouvelée chaque semaine.
+if (probeBrowser.available && explorationWanted()) {
+  console.log(`\n🔎 Exploration de ${TARGET_URL}`)
+  try {
+    const explored = await exploreSite(probeBrowser, {
+      url: TARGET_URL,
+      storageState: DEFAULT_STORAGE_STATE,
+    })
+    profile = explored
+    console.log(
+      `  ${explored.status} · ${explored.products.length} produit(s) · ${Math.round(
+        (explored.durationMs ?? 0) / 1000,
+      )} s`,
+    )
+    for (const issue of (explored.issues ?? []).slice(0, 5)) console.log(`  ⚠ ${issue}`)
+    const llmPlan = await planFor(explored)
+    applyEnrichments({ rebuild: true, llmPlan })
+    console.log(`  ${Object.keys(overlays).length} cas enrichi(s) à partir du profil`)
+    const saved = await saveSiteProfile(explored, overlays, llmPlan ? 'hybrid' : 'crawler')
+    if (saved) {
+      console.log(
+        `  💾 profil v${saved.version} enregistré (expire le ${String(saved.expires_at).slice(0, 10)})`,
+      )
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    console.log(`  ⚠ exploration impossible : ${message.slice(0, 200)}`)
+  }
+} else if (profile) {
+  console.log(
+    `\n🔎 Profil réutilisé (${profileMeta?.captured_at?.slice(0, 10) ?? 'date inconnue'})`,
+  )
+  applyEnrichments()
+}
+
 try {
   for (const [index, c] of cases.entries()) {
     const spec = specFor(c)
@@ -561,6 +830,7 @@ try {
           videoDir: VIDEO_DIR,
           videoName: `${c.code}.webm`,
           videoTailMs: VIDEO_TAIL_MS,
+          expect: spec.expect ?? {},
         })
 
     verdict = spec.kind === 'webmcp'
@@ -618,6 +888,16 @@ const payload = {
   cases: results,
   summary: counts,
   videos,
+  exploration: profile
+    ? {
+        status: profile.status ?? null,
+        site: profile.site?.url ?? null,
+        captured_at: profile.captured_at ?? null,
+        profile_version: profileMeta?.version ?? null,
+        products: Array.isArray(profile.products) ? profile.products.length : 0,
+        enriched_cases: Object.keys(overlays).length,
+      }
+    : null,
 }
 
 mkdirSync(dirname(OUTPUT_FILE), { recursive: true })
