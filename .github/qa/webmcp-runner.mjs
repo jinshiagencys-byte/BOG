@@ -53,6 +53,39 @@ function formatMs(ms) {
   return `${(ms / 1000).toFixed(1).replace('.', ',')} s`
 }
 
+/**
+ * Dépose la vidéo du cas dans le bucket privé, via le jeton du run. Un échec
+ * d'upload ne change pas le verdict : la vidéo reste une preuve complémentaire
+ * et l'artefact CI la conserve.
+ */
+async function uploadEvidence(code, file) {
+  if (!EVIDENCE_UPLOAD_URL || !RUN_TOKEN || !file || !existsSync(file)) return null
+  try {
+    const bytes = readFileSync(file)
+    const response = await fetch(EVIDENCE_UPLOAD_URL, {
+      method: 'POST',
+      headers: {
+        'x-run-token': RUN_TOKEN,
+        'x-case-code': code,
+        'content-type': 'video/webm',
+      },
+      body: bytes,
+    })
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok || !payload?.path) {
+      console.log(
+        `  ⚠ vidéo non archivée : ${payload?.error ?? `HTTP ${response.status}`}`,
+      )
+      return null
+    }
+    return payload.path
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    console.log(`  ⚠ vidéo non archivée : ${message.slice(0, 200)}`)
+    return null
+  }
+}
+
 const ROOT = resolve(env('QA_ROOT', join(HERE, '..', '..')))
 // Une variable définie mais vide (workflow_dispatch sans manifeste) vaut absente.
 const MANIFEST_PATH = env('RUN_MANIFEST') || env('WEBMCP_DEMO_MANIFEST')
@@ -63,6 +96,8 @@ const TARGET_URL = env('TARGET_URL', 'http://127.0.0.1:4173/webmcp-demo.html')
 const CASE_DELAY_MS = Number(env('WEBMCP_DELAY_MS', '0'))
 const VIDEO_DIR = env('WEBMCP_VIDEO_DIR') ? resolve(env('WEBMCP_VIDEO_DIR')) : null
 const VIDEO_TAIL_MS = Number(env('WEBMCP_VIDEO_TAIL_MS', '700'))
+const EVIDENCE_UPLOAD_URL = env('EVIDENCE_UPLOAD_URL')
+const RUN_TOKEN = env('RUN_TOKEN')
 const ONLY = env('CASE_CODES', '').split(',').map((value) => value.trim()).filter(Boolean)
 
 const goals = readJson(GOALS_FILE, {})
@@ -347,6 +382,7 @@ function evidenceOf(spec, verdict) {
         error: step.error ?? null,
       })),
       video: execution.video ?? null,
+      video_path: execution.videoPath ?? null,
       elapsed_ms: execution.durationMs ?? null,
       url: verdict.finalUrl || null,
       final_url: verdict.finalUrl || null,
@@ -376,6 +412,7 @@ function evidenceOf(spec, verdict) {
     webmcp_confirmation_requested: spec.confirm === true,
     webmcp_tools_detected: execution.tools ?? [],
     video: execution.video ?? null,
+    video_path: execution.videoPath ?? null,
     elapsed_ms: execution.durationMs ?? null,
     // `url` alimente evidence_url côté base, sans capture d’écran.
     url: verdict.finalUrl || null,
@@ -529,6 +566,16 @@ try {
     verdict = spec.kind === 'webmcp'
       ? verifyWebMcp(spec, execution)
       : verifyPlaywright(spec, execution)
+
+    // La vidéo part dans le bucket après le verdict : un échec d'upload ne
+    // transforme pas un cas réussi en échec.
+    if (execution.video) {
+      const archived = await uploadEvidence(c.code, execution.video)
+      if (archived) {
+        execution.videoPath = archived
+        console.log(`  ☁ ${archived}`)
+      }
+    }
 
     const executorLabel = spec.kind === 'webmcp'
       ? `outil ${spec.tool}`

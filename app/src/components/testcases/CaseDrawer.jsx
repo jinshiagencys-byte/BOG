@@ -1,5 +1,9 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Icon from '../Icon.jsx'
+import { useApp } from '../../app/app-context.js'
+import { getCaseRuns, messageForError } from '../../lib/api.js'
+import { fmtDuration } from '../../lib/format.js'
+import { statusMeta } from '../../lib/meta.js'
 
 // Onglets du tiroir : Attachments et History ont été retirés.
 const TABS = [
@@ -39,11 +43,15 @@ function toGherkin(item) {
 }
 
 export default function CaseDrawer({ item, index, total, onClose, onPrev, onNext, onChange }) {
+  const { openRun } = useApp()
   const [tab, setTab] = useState('overview')
   const [stepsMode, setStepsMode] = useState('classic')
   const [open, setOpen] = useState({ desc: true, prepost: true, steps: true })
   const [draftState, setDraft] = useState(null)
   const [stepEditState, setStepEdit] = useState(null)
+  const [runs, setRuns] = useState([])
+  const [runsState, setRunsState] = useState('idle')
+  const [runsError, setRunsError] = useState('')
   const actionRef = useRef(null)
 
   const toggle = (key) => setOpen((o) => ({ ...o, [key]: !o[key] }))
@@ -54,6 +62,40 @@ export default function CaseDrawer({ item, index, total, onClose, onPrev, onNext
   // automatiquement quand on passe au cas précédent/suivant.
   const draft = draftState && draftState.id === item?.id ? draftState : null
   const stepEdit = stepEditState && stepEditState.id === item?.id ? stepEditState : null
+
+  // « Liens testés » liste les vraies exécutions du cas. Les cas de la démo
+  // sont statiques et n'ont pas d'identifiant en base : on n'interroge rien.
+  const caseId = item?.id || null
+  const isPersistedCase =
+    typeof caseId === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(caseId)
+
+  useEffect(() => {
+    if (tab !== 'linked' || !isPersistedCase) {
+      setRuns([])
+      setRunsState('idle')
+      setRunsError('')
+      return undefined
+    }
+    let mounted = true
+    setRunsState('loading')
+    setRunsError('')
+    getCaseRuns(caseId)
+      .then((rows) => {
+        if (!mounted) return
+        setRuns(rows)
+        setRunsState('ready')
+      })
+      .catch((loadError) => {
+        if (!mounted) return
+        setRuns([])
+        setRunsError(messageForError(loadError))
+        setRunsState('error')
+      })
+    return () => {
+      mounted = false
+    }
+  }, [tab, caseId, isPersistedCase])
 
   const startStep = () => {
     setOpen((o) => ({ ...o, steps: true }))
@@ -427,9 +469,58 @@ export default function CaseDrawer({ item, index, total, onClose, onPrev, onNext
         ) : null}
 
         {tab === 'linked' ? (
-          <div className="td-tc-empty">
-            <Icon name="circle-dashed" className="td-ic-20" />
-            <span>Aucune exécution n’est associée à ce cas de test.</span>
+          <div className="td-tc-linked">
+            {runsState === 'loading' ? (
+              <div className="td-tc-empty">
+                <span className="td-spinner" aria-hidden="true" />
+                <span>Chargement des exécutions…</span>
+              </div>
+            ) : runsState === 'error' ? (
+              <div className="td-tc-empty">
+                <Icon name="triangle-alert" className="td-ic-20" />
+                <span>{runsError}</span>
+              </div>
+            ) : runs.length ? (
+              <>
+                <p className="td-tc-linked-note">
+                  {runs.length} exécution{runs.length > 1 ? 's' : ''} de ce cas.
+                </p>
+                <ul className="td-linked-runs">
+                  {runs.map((run) => {
+                    const meta = statusMeta(run.status)
+                    return (
+                      <li key={run.id}>
+                        <button
+                          type="button"
+                          className="td-linked-run"
+                          onClick={() => openRun(run, runs)}
+                        >
+                          <span className={`td-linked-run-dot is-${run.status}`} />
+                          <span className="td-linked-run-main">
+                            <span className="td-linked-run-title">
+                              #{run.counter} · {meta.label}
+                            </span>
+                            <span className="td-linked-run-meta">
+                              {run.startTime
+                                ? new Date(run.startTime).toLocaleString('fr-FR')
+                                : '—'}{' '}
+                              · {fmtDuration(run.durationMs)} · {run.passedCount}/{run.total}{' '}
+                              réussi{run.passedCount > 1 ? 's' : ''}
+                            </span>
+                          </span>
+                          <Icon name="chevron-right" className="td-ic-12" />
+                        </button>
+                      </li>
+                    )
+                  })}
+                </ul>
+              </>
+            ) : (
+              <div className="td-tc-empty">
+                <Icon name="circle-dashed" className="td-ic-20" />
+                <span>Aucune exécution n’est associée à ce cas de test.</span>
+              </div>
+            )}
           </div>
         ) : null}
       </div>

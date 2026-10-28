@@ -38,6 +38,10 @@ on:
         description: "URL de l'Edge Function report-run"
         required: false
         type: string
+      evidence_upload_url:
+        description: "URL de l'Edge Function upload-evidence (vidéos, facultative)"
+        required: false
+        type: string
       target_url:
         description: "URL cible par défaut (facultative)"
         required: false
@@ -180,6 +184,7 @@ jobs:
           QA_RUN_ID: ${{ inputs.qa_run_id }}
           REPORT_URL: ${{ inputs.report_url }}
           RUN_TOKEN: ${{ inputs.run_token }}
+          EVIDENCE_UPLOAD_URL: ${{ inputs.evidence_upload_url }}
           WEBMCP_DELAY_MS: "0"
           WEBMCP_VIDEO_DIR: ${{ github.workspace }}/qa-videos
           WEBMCP_VIDEO_TAIL_MS: "700"

@@ -183,6 +183,10 @@ Deno.serve(async (req) => {
     report_url: reportUrl,
     target_url: site.site_url ?? '',
   };
+  // Les preuves vidéo ne concernent que l'exécuteur Playwright/WebMCP.
+  if (executor === 'webmcp') {
+    inputs.evidence_upload_url = `${supabaseUrl}/functions/v1/upload-evidence`;
+  }
   if (executor === 'antigravity') inputs.model = model;
 
   try {

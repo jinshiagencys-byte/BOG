@@ -710,8 +710,46 @@ export async function getRunResults(runId) {
     .sort((a, b) => String(a.code).localeCompare(String(b.code), 'fr'))
 }
 
-export async function listAcknowledgedRunIds(userId) {
+/**
+ * Exécutions qui ont réellement joué ce cas. Sert à l'onglet « Liens testés »
+ * du tiroir de cas : on veut les vrais runs, pas une liste décorative.
+ */
+export async function getCaseRuns(caseId, { limit = 20 } = {}) {
   const { data, error } = await supabase
+    .from('test_case_results')
+    .select(
+      `id,status,started_at,duration_ms,failure_message,
+       run:test_runs(
+         id,site_id,plan_id,run_number,status,started_at,finished_at,duration_ms,
+         total_count,passed_count,failed_count,blocked_count,skipped_count,
+         suite_label,branch,commit_sha,github_run_url,"trigger"
+       )`,
+    )
+    .eq('case_id', caseId)
+    .order('started_at', { ascending: false })
+    .limit(limit)
+
+  if (error) throw toApiError(error)
+
+  return (data || [])
+    .filter((row) => row.run)
+    .map((row) => ({ ...mapRun(row.run), caseStatus: row.status, caseDuration: row.duration_ms }))
+}
+
+/**
+ * URL signée d'une preuve stockée. Le bucket est privé : la policy
+ * `qa_evidence_member_read` vérifie l'organisation du chemin.
+ */
+export async function getEvidenceUrl(path, expiresIn = 3600) {
+  if (!path) return null
+  const { data, error } = await supabase.storage
+    .from('qa-evidence')
+    .createSignedUrl(path, expiresIn)
+  if (error) throw toApiError(error)
+  return data?.signedUrl ?? null
+}
+
+export async function listAcknowledgedRunIds(userId) {  const { data, error } = await supabase
     .from('run_acknowledgements')
     .select('run_id')
     .eq('user_id', userId)

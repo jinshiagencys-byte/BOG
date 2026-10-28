@@ -125,6 +125,30 @@ vidéos sont une preuve complémentaire : leur absence ne change pas le verdict.
 ffmpeg est nécessaire à `recordVideo`. Le workflow l'installe avec
 `playwright-core/cli.js install ffmpeg` (pas de navigateur supplémentaire).
 
+## Preuves visibles dans l'application
+
+Quand `EVIDENCE_UPLOAD_URL` et `RUN_TOKEN` sont fournis (cas d'un run lancé par
+`start-run`), le runner dépose chaque vidéo via `upload-evidence` :
+
+```
+qa-evidence/<org_id>/<run_id>/<CODE>.webm
+```
+
+- bucket **privé** ; aucune écriture possible depuis le navigateur ;
+- `upload-evidence` vérifie le jeton éphémère du run et retrouve l'org par
+  `test_runs → sites.org_id` ;
+- l'application crée une URL signée (`getEvidenceUrl`) et affiche un lecteur dans
+  « Voir la preuve » ;
+- l'onglet **« Liens testés »** d'un cas liste ses exécutions réelles et ouvre le
+  tiroir du run.
+
+Un échec d'upload n'échoue jamais un cas : la vidéo reste dans l'artefact CI et le
+verdict est inchangé. `start-run` transmet automatiquement `evidence_upload_url` pour
+l'exécuteur `webmcp`.
+
+Rétention : une vidéo pèse quelques centaines de Ko. À 1 Go de stockage gratuit, prévoir
+une purge (par exemple ne garder que les runs échoués, ou 30 jours).
+
 ## Lancer depuis l'application
 
 `start-run` accepte `executor: "webmcp"` et déclenche `webmcp-qa.yml`. Le rapport est
@@ -197,4 +221,6 @@ node .github/qa/webmcp-runner.mjs
 - `.github/workflows/webmcp-qa.yml` — workflow Playwright ;
 - `.github/qa/fixtures/webmcp-demo.html` — page instrumentée de démonstration ;
 - `.github/qa/webmcp-demo-cases.json` / `webmcp-demo-manifest.json` — jeu de démo ;
-- `.github/qa/playwright-cases.json` / `playwright-odjafrik-manifest.json` — jeu odjafrik.
+- `.github/qa/playwright-cases.json` / `playwright-odjafrik-manifest.json` — jeu odjafrik ;
+- `supabase/functions/upload-evidence/index.ts` — dépôt des vidéos dans le bucket privé ;
+- `supabase/migrations/20261028130000_v2_11_qa_evidence.sql` — bucket + policy de lecture.

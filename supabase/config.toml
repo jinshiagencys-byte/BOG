@@ -16,6 +16,11 @@ verify_jwt = false
 [functions.run-manifest]
 verify_jwt = false
 
+# Appelée par le workflow GitHub avec x-run-token, jamais par le navigateur.
+# Le jeton du run est vérifié dans la fonction elle-même.
+[functions.upload-evidence]
+verify_jwt = false
+
 # Envoi d'un email d'invitation depuis le navigateur (JWT utilisateur).
 [functions.send-invite-email]
 verify_jwt = true

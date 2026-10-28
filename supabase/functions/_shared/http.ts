@@ -1,7 +1,7 @@
 export const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers':
-    'authorization, x-client-info, apikey, content-type, x-run-token',
+    'authorization, x-client-info, apikey, content-type, x-run-token, x-case-code',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
 };
 

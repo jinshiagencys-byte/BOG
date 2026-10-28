@@ -7,6 +7,7 @@ import { statusMeta } from '../lib/meta.js'
 import { testCases } from '../data/suites.js'
 import {
   acknowledgeRun,
+  getEvidenceUrl,
   getRunResults,
   messageForError,
 } from '../lib/api.js'
@@ -17,9 +18,49 @@ const TABS = [
   { id: 'failed', label: 'Échoué' },
 ]
 
+function hasEvidence(step) {
+  return Boolean(step?.evidenceUrl || step?.evidence?.video_path)
+}
+
+function EvidenceVideo({ path }) {
+  const [url, setUrl] = useState('')
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let mounted = true
+    setUrl('')
+    setError('')
+    getEvidenceUrl(path)
+      .then((signed) => {
+        if (mounted) setUrl(signed || '')
+      })
+      .catch((loadError) => {
+        if (mounted) setError(messageForError(loadError))
+      })
+    return () => {
+      mounted = false
+    }
+  }, [path])
+
+  if (error) {
+    return <p className="td-run-video-note">Vidéo indisponible : {error}</p>
+  }
+  if (!url) {
+    return <p className="td-run-video-note">Chargement de la vidéo…</p>
+  }
+  return (
+    <figure className="td-run-video">
+      <video controls preload="metadata" src={url} />
+      <figcaption>Enregistrement du parcours</figcaption>
+    </figure>
+  )
+}
+
 function ResultCard({ item, failed, proofOpen, onProof, acked, onAck }) {
   const steps = item.steps || []
   const label = item.code || item.id
+  const videoPath = steps.find((step) => step.evidence?.video_path)?.evidence?.video_path || null
+  const proofable = steps.some(hasEvidence)
 
   return (
     <article className={'td-run-case' + (failed ? ' is-failed' : ' is-passed')}>
@@ -49,28 +90,34 @@ function ResultCard({ item, failed, proofOpen, onProof, acked, onAck }) {
                 {step.actual ? <em>Observé : {step.actual}</em> : null}
                 {step.evidenceUrl ? (
                   <a href={step.evidenceUrl} target="_blank" rel="noreferrer">
-                    Voir la preuve
+                    Voir la page testée
                   </a>
                 ) : null}
               </li>
             ))}
           </ol>
         ) : null}
+
+        {proofOpen && videoPath ? <EvidenceVideo path={videoPath} /> : null}
       </div>
 
-      {failed ? (
+      {proofable || failed ? (
         <div className="td-run-case-actions">
-          <button type="button" className="td-btn td-btn-ghost" onClick={onProof}>
-            {proofOpen ? 'Masquer la preuve' : 'Voir la preuve'}
-          </button>
-          <button
-            type="button"
-            className="td-btn td-btn-ghost"
-            onClick={onAck}
-            disabled={acked}
-          >
-            {acked ? 'Acquitté' : 'Acquitter'}
-          </button>
+          {proofable ? (
+            <button type="button" className="td-btn td-btn-ghost" onClick={onProof}>
+              {proofOpen ? 'Masquer la preuve' : 'Voir la preuve'}
+            </button>
+          ) : null}
+          {failed ? (
+            <button
+              type="button"
+              className="td-btn td-btn-ghost"
+              onClick={onAck}
+              disabled={acked}
+            >
+              {acked ? 'Acquitté' : 'Acquitter'}
+            </button>
+          ) : null}
         </div>
       ) : null}
     </article>
