@@ -136,7 +136,7 @@ async function checkVisibleTexts(page, patterns) {
   const viewport = page.viewportSize() ?? { width: 1280, height: 720 }
   const checks = []
   for (const pattern of patterns) {
-    const locator = page.getByText(new RegExp(pattern, 'i')).first()
+    const locator = page.getByText(new RegExp(pattern, 'i'))
     let found = 0
     try {
       found = await locator.count()
@@ -147,16 +147,20 @@ async function checkVisibleTexts(page, patterns) {
     let inViewport = false
     let scrolled = false
     let kind = 'element'
-    if (found) {
-      kind = await locator
-        .evaluate((node) => (node.tagName?.toLowerCase() === 'option' ? 'option' : 'element'))
+    // Un même libellé peut exister deux fois (menu mobile masqué, doublon de
+    // carte) : on retient la meilleure occurrence, pas seulement la première.
+    const limit = Math.min(found, 8)
+    for (let index = 0; index < limit; index += 1) {
+      const node = locator.nth(index)
+      const nodeKind = await node
+        .evaluate((element) => (element.tagName?.toLowerCase() === 'option' ? 'option' : 'element'))
         .catch(() => 'element')
-      if (kind === 'option') {
+      if (nodeKind === 'option') {
         // Une <option> n’est jamais « visible » au sens CSS : c’est le select
         // qui l’est. On vérifie donc le contrôle qui la contient.
-        visible = await locator
-          .evaluate((node) => {
-            const select = node.closest('select')
+        const optionVisible = await node
+          .evaluate((element) => {
+            const select = element.closest('select')
             if (!select) return false
             const rect = select.getBoundingClientRect()
             const style = getComputedStyle(select)
@@ -168,21 +172,39 @@ async function checkVisibleTexts(page, patterns) {
             )
           })
           .catch(() => false)
-        inViewport = visible
-      } else {
-        const before = await locator.boundingBox().catch(() => null)
-        scrolled = before ? before.y < 0 || before.y > viewport.height - 20 : false
-        await locator.scrollIntoViewIfNeeded({ timeout: 5000 }).catch(() => {})
-        visible = await locator.isVisible().catch(() => false)
-        const box = await locator.boundingBox().catch(() => null)
-        if (box) {
-          inViewport =
-            box.y + Math.min(box.height, 4) >= 0 &&
-            box.y <= viewport.height &&
-            box.x < viewport.width &&
-            box.x + Math.min(box.width, 4) >= 0
+        if (optionVisible) {
+          visible = true
+          inViewport = true
+          kind = 'option'
+          break
         }
+        continue
       }
+      const before = await node.boundingBox().catch(() => null)
+      // Un élément sans boîte est masqué : inutile d’attendre son apparition.
+      if (!before) continue
+      await node.scrollIntoViewIfNeeded({ timeout: 5000 }).catch(() => {})
+      const nodeVisible = await node.isVisible().catch(() => false)
+      if (!nodeVisible) continue
+      const box = await node.boundingBox().catch(() => null)
+      const nodeInViewport = Boolean(
+        box &&
+          box.y + Math.min(box.height, 4) >= 0 &&
+          box.y <= viewport.height &&
+          box.x < viewport.width &&
+          box.x + Math.min(box.width, 4) >= 0,
+      )
+      if (nodeInViewport) {
+        visible = true
+        inViewport = true
+        scrolled = Boolean(before && (before.y < 0 || before.y > viewport.height - 20))
+        kind = 'element'
+        break
+      }
+      // Occurrence visible mais hors fenêtre : on garde la trace et on
+      // continue, une autre copie peut être à l’écran.
+      visible = true
+      kind = 'element'
     }
     checks.push({ pattern, found, visible, inViewport, scrolled, kind })
   }

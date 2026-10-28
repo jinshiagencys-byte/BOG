@@ -86,10 +86,18 @@ place de `webmcp` :
 ```
 
 Actions disponibles : `goto`, `fill`, `press`, `click`, `waitForText`, `waitForSelector`,
-`waitForUrl`, `expectUrl`, `wait`. Les cibles acceptent `selector`, `placeholder`, `label`,
-`text`, ou `role` + `name`. `expect` accepte `text` (regex), `failIfText` (regex) et `url`
-(regex). Une étape en échec arrête le scénario et donne `failed / step-failed` ; une erreur
-réseau ou un délai dépassé donne `blocked / network`.
+`waitForUrl`, `expectUrl`, `wait`, `scroll`, `scrollThrough`, `selectOption`, `evaluate`.
+Les cibles acceptent `selector`, `placeholder`, `label`, `text`, ou `role` + `name`.
+`expect` accepte `text` (regex), `failIfText` (regex), `url` (regex) et `collected`
+(valeurs relevées par `evaluate`, avec `minCount` et `ordered: "asc" | "desc"`). Une étape
+en échec arrête le scénario et donne `failed / step-failed` ; une erreur réseau ou un
+délai dépassé donne `blocked / network`.
+
+Chaque texte attendu est **amené à l'écran** (`scrollIntoViewIfNeeded`) avant d'être
+validé. Un texte présent dans le DOM mais jamais visible donne `failed / not-visible` :
+c'est la différence entre « la page contient ce texte » et « l'utilisateur le voit ».
+Les `<option>` sont vérifiées via leur `<select>`, et si un libellé existe en double
+(menu mobile masqué), la première occurrence réellement visible est retenue.
 
 Les sites qui hydratent leur interface en JavaScript demandent une attente après `goto` :
 un `fill` immédiat peut remplir un champ avant que le gestionnaire `Enter` soit attaché.
@@ -102,6 +110,37 @@ résultat, fiche produit, catalogue, vendeurs, artisans, annonces. Pour le lance
 Un `429` renvoyé par l'API du site donne `blocked / rate-limited` : c'est un quota, pas un
 défaut produit. Les autres erreurs HTTP restent des échecs. Le runner expose aussi
 `playwright_http_errors` dans la preuve.
+
+## Exploration du site et schéma de test
+
+Un cas rédigé de façon vague (« vérifier la recherche ») ne dit pas quel produit,
+quel prix ni quel libellé attendre. Avant d'exécuter, le runner explore donc le site
+soumis une fois, puis réutilise le résultat pendant sept jours.
+
+1. **Exploration déterministe** (`site-explorer.mjs`) : accueil, catalogue, tri,
+   recherche (terme réel, état vide), fiche produit, annuaire des vendeurs, devise.
+   Les faits relevés sont enregistrés dans `site_profiles` via `save-site-profile` et
+   renvoyés par `run-manifest` quand ils ont moins de sept jours.
+2. **Schéma LLM** (`case-planner.mjs`, facultatif) : le modèle reçoit ces faits et les
+   cas, puis décide pour chacun le motif (`search`, `empty-search`, `product`,
+   `catalog`, `catalog-sort`, `sellers`, `navigation`), les vérifications attendues,
+   et les textes qui doivent être visibles (`mustSee`) ou jamais affichés
+   (`mustNotSee`). Il ne fournit **ni sélecteur ni script**.
+3. **Filtrage** : une assertion `mustSee` qui ne correspond à aucun fait observé est
+   écartée ; un `mustNotSee` qui correspond à un fait observé aussi.
+4. **Enrichissement** (`case-enricher.mjs`) : le motif produit un scénario Playwright
+   déterministe avec les vraies données, plus des étapes lisibles pour l'écran. Une
+   exploration fraîche remplace les enrichissements ; un profil réutilisé garde ceux
+   qui ont été enregistrés avec lui.
+
+Le LLM est donc un planificateur, pas un exécuteur : si sa réponse est vide ou
+illisible, le runner garde le scénario déterministe et le run continue. Variables :
+`WEBMCP_PLAN` (`auto` par défaut, `on`, `off`), `OPENCODE_API_KEY` +
+`OPENCODE_MODEL`, ou `WEBMCP_PLAN_ENDPOINT` / `WEBMCP_PLAN_KEY` / `WEBMCP_PLAN_MODEL`.
+
+L'exploration se déclenche quand le manifeste ne contient pas de profil frais et
+qu'un cas n'a pas d'objectif écrit à la main. `WEBMCP_EXPLORE=force` l'impose,
+`WEBMCP_EXPLORE=off` la désactive (utile pour les lots GitHub rapides).
 
 ## Verdicts
 
