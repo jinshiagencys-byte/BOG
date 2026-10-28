@@ -180,7 +180,7 @@ Deno.serve(async (req) => {
   // Le workflow déclare son exécuteur ; on ne l'écrase plus avec une valeur
   // par défaut historique. La liste reste fermée pour éviter qu'une valeur
   // arbitraire entre en base.
-  const allowedExecutors = new Set(['fastbrowse', 'antigravity', 'ironbee', 'jev-ra', 'manual']);
+  const allowedExecutors = new Set(['fastbrowse', 'antigravity', 'ironbee', 'jev-ra', 'webmcp', 'manual']);
   const requestedExecutor = (asText(body.executor) ?? '').trim().toLowerCase();
   const executor = allowedExecutors.has(requestedExecutor)
     ? requestedExecutor

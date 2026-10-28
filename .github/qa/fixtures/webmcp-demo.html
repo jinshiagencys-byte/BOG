@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>WebMCP — page de démonstration</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; line-height: 1.5; }
+    h1 { font-size: 1.4rem; }
+    #status { font-weight: 600; }
+    #log { color: #444; }
+    code { background: #f2f2f2; padding: 0 .25rem; }
+  </style>
+</head>
+<body>
+  <h1>WebMCP — page de démonstration</h1>
+  <p>Cette page n’existe que pour le test CI du runner WebMCP. Elle n’appelle
+    aucun service externe.</p>
+  <p>Statut : <span id="status">inactif</span></p>
+  <p>Journal :</p>
+  <ul id="log"></ul>
+
+  <script>
+    const statusNode = document.getElementById('status')
+    const logNode = document.getElementById('log')
+
+    function log(message) {
+      const item = document.createElement('li')
+      item.textContent = message
+      logNode.append(item)
+    }
+
+    const tools = [
+      {
+        name: 'demo_echo',
+        description: 'Renvoie le message fourni. Outil de lecture.',
+        inputSchema: {
+          type: 'object',
+          properties: { message: { type: 'string' } },
+          required: ['message'],
+        },
+        annotations: { readOnlyHint: true },
+        execute: async ({ message }) => {
+          log(`echo: ${message}`)
+          return { ok: true, message: String(message ?? '') }
+        },
+      },
+      {
+        name: 'demo_add',
+        description: 'Additionne deux nombres. Outil de lecture.',
+        inputSchema: {
+          type: 'object',
+          properties: { a: { type: 'number' }, b: { type: 'number' } },
+          required: ['a', 'b'],
+        },
+        annotations: { readOnlyHint: true },
+        execute: async ({ a, b }) => {
+          const sum = Number(a) + Number(b)
+          log(`add: ${a} + ${b} = ${sum}`)
+          return { ok: true, sum }
+        },
+      },
+      {
+        name: 'demo_set_status',
+        description:
+          'Change le statut affiché. Mutation : demande une confirmation visible.',
+        inputSchema: {
+          type: 'object',
+          properties: { status: { type: 'string' } },
+          required: ['status'],
+        },
+        annotations: { readOnlyHint: false, consequentialHint: true },
+        execute: async ({ status }) => {
+          if (!window.confirm(`Changer le statut en « ${status} » ?`)) {
+            log('set_status: annulé')
+            return { cancelled: true }
+          }
+          statusNode.textContent = status
+          log(`set_status: ${status}`)
+          return { ok: true, status }
+        },
+      },
+    ]
+
+    if (document.modelContext && typeof document.modelContext.registerTool === 'function') {
+      for (const tool of tools) {
+        document.modelContext.registerTool(tool)
+      }
+      log(`${tools.length} outils WebMCP enregistrés`)
+    } else {
+      log('WebMCP indisponible dans ce navigateur')
+    }
+  </script>
+</body>
+</html>

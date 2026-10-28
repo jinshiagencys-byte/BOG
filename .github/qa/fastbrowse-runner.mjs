@@ -18,7 +18,6 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { performance } from 'node:perf_hooks'
 import { openProbe, probeUrl } from './page-probe.mjs'
-import { runWebMcpTool } from './webmcp-executor.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
@@ -95,6 +94,11 @@ delete fastbrowseEnv.OPENROUTER_API_KEY
 delete fastbrowseEnv.AI_GATEWAY_API_KEY
 delete fastbrowseEnv.BROWSER_USE_API_KEY
 
+if (!openCodeKey) {
+  console.error('OPENCODE_API_KEY manquante. Renseigne le secret GitHub OPENCODE_API_KEY.')
+  process.exit(2)
+}
+
 const goals = readJson(GOALS_FILE, {})
 const manifest = readJson(MANIFEST_FILE, null)
 const planCases = manifest ? null : readJson(PLAN_FILE, [])
@@ -156,34 +160,6 @@ function defaultGoal(c) {
 function goalFor(c) {
   const configured = goals[c.code]
   return configured ? { ...configured, mapped: true } : defaultGoal(c)
-}
-
-// Un cas instrumenté déclare l’outil WebMCP à exécuter. Le parcours fastbrowse
-// n’est alors pas lancé : la page exécute elle-même l’action, le runner garde
-// les assertions.
-function webMcpGoalOf(goal) {
-  const spec = goal?.webmcp
-  if (!spec || !spec.tool) return null
-  return {
-    tool: spec.tool,
-    args: spec.args ?? {},
-    confirm: spec.confirm === true,
-    waitMs: spec.waitMs,
-    timeoutMs: spec.timeoutMs,
-    url: spec.url || goal.webmcpUrl || goal.url || TARGET_URL,
-    storageState: spec.storageState ?? goal.storageState ?? null,
-    expect: spec.expect ?? goal.webmcpExpect ?? {},
-    label: goal.label || `l’outil ${spec.tool}`,
-  }
-}
-
-const needsFastbrowse = cases.some((c) => !webMcpGoalOf(goalFor(c)))
-if (needsFastbrowse && !openCodeKey) {
-  console.error('OPENCODE_API_KEY manquante. Renseigne le secret GitHub OPENCODE_API_KEY.')
-  process.exit(2)
-}
-if (!needsFastbrowse) {
-  console.log('Tous les cas sont WebMCP : aucune clé OpenCode n’est nécessaire.')
 }
 
 function cachePath(code) {
@@ -621,208 +597,6 @@ async function verify(c, goal, run, probeBrowser) {
   }
 }
 
-function verifyWebMcp(spec, execution) {
-  const text = String(execution.text ?? '')
-  const response = execution.result ?? null
-  const url = execution.url ?? ''
-  const expect = spec.expect ?? {}
-  const textChecks = (expect.text ?? []).map((pattern) => ({
-    pattern,
-    ok: new RegExp(pattern, 'i').test(text),
-  }))
-  const negativeChecks = (expect.failIfText ?? []).map((pattern) => ({
-    pattern,
-    matched: new RegExp(pattern, 'i').test(text),
-  }))
-  const negative = negativeChecks.find((check) => check.matched)?.pattern ?? null
-  const urlOk = !expect.url || new RegExp(expect.url, 'i').test(url)
-  let parsed = response
-  if (typeof parsed === 'string') {
-    try {
-      parsed = JSON.parse(parsed)
-    } catch {
-      parsed = response
-    }
-  }
-  const cancelled = parsed && typeof parsed === 'object' && parsed.cancelled === true
-  const missingTexts = textChecks.filter((check) => !check.ok).map((check) => check.pattern)
-  const excerpt = cleanText(text, 1200)
-  const label = spec.label || `l’outil ${spec.tool}`
-  const error = cleanText(execution.error, 500)
-  const networkLike = /timeout|net::|econn|fetch failed|failed to fetch|network/i.test(error)
-
-  let status = 'passed'
-  let reason = 'tool-result'
-  let actual = `Attendu observé : ${label}. L’outil ${spec.tool} a répondu en ${formatMs(execution.durationMs)}.`
-
-  if (!execution.available) {
-    status = 'blocked'
-    reason = 'probe-unavailable'
-    actual = `Sonde de page indisponible : ${error || 'raison inconnue'}.`
-  } else if (!execution.ok) {
-    const toolMissing = /Outil WebMCP introuvable/.test(execution.error ?? '')
-    status = toolMissing || networkLike ? 'blocked' : 'failed'
-    reason = toolMissing ? 'tool-missing' : networkLike ? 'network' : 'tool-error'
-    actual = toolMissing
-      ? `L’outil ${spec.tool} n’est pas exposé par la page ${url}. Outils détectés : ${(execution.tools ?? []).join(', ') || 'aucun'}.`
-      : `L’outil ${spec.tool} a échoué : « ${error} ».`
-  } else if (cancelled) {
-    status = 'failed'
-    reason = 'confirmation-refused'
-    actual = `L’outil ${spec.tool} a été annulé : la confirmation demandée n’a pas été acceptée.${execution.dialog ? ` Dialogue : « ${execution.dialog.message} ».` : ''} Réponse : « ${excerpt} ».`
-  } else if (negative) {
-    status = 'failed'
-    reason = 'negative-evidence'
-    actual = `Le résultat contient « ${negative} » au lieu de ${label}. Réponse : « ${excerpt} ».`
-  } else if (missingTexts.length) {
-    status = 'failed'
-    reason = 'content-missing'
-    actual = `Le résultat de ${spec.tool} ne contient pas ${missingTexts.map((pattern) => `« ${pattern} »`).join(', ')}. Réponse : « ${excerpt} ».`
-  } else if (!urlOk) {
-    status = 'failed'
-    reason = 'expectation-mismatch'
-    actual = `L’outil ${spec.tool} s’est exécuté sur ${url}, qui ne correspond pas à « ${expect.url} ».`
-  } else if (expect.dialog === true && !execution.dialog) {
-    status = 'failed'
-    reason = 'missing-confirmation'
-    actual = `Aucune confirmation visible n’a été demandée pour ${spec.tool}, alors qu’une mutation doit rester sous contrôle de l’utilisateur.`
-  }
-
-  if (status === 'passed') {
-    actual += textChecks.length
-      ? ` Vérifié : ${textChecks.map((check) => `« ${check.pattern} »`).join(', ')}.`
-      : ' Aucune assertion de texte demandée.'
-    if (execution.dialog) actual += ` Confirmation visible : « ${execution.dialog.message} ».`
-  }
-
-  return {
-    status,
-    reason,
-    urlOk,
-    textOk: textChecks.every((check) => check.ok),
-    textChecks,
-    probeTextChecks: [],
-    probeReloadOk: null,
-    negativeChecks,
-    hasNegativeEvidence: Boolean(negative),
-    consoleErrors: [],
-    seriousFindings: [],
-    transient: [],
-    findings: [],
-    pages: url ? [{ url, title: spec.tool, excerpt }] : [],
-    finalUrl: url,
-    probe: {
-      available: true,
-      url,
-      httpStatus: null,
-      contentMs: execution.durationMs ?? null,
-      reloadContentMs: null,
-      durationMs: execution.durationMs ?? null,
-      matched: status === 'passed',
-      reloadMatched: null,
-      negative: negative,
-      consoleErrors: [],
-      navError: null,
-      webmcp: {
-        available: true,
-        tools: (execution.tools ?? []).map((name) => ({ name })),
-        executed: spec.tool,
-      },
-    },
-    productCount: null,
-    agentProductCount: null,
-    articleCount: null,
-    contentMs: execution.durationMs ?? null,
-    reloadContentMs: null,
-    maxContentMs: null,
-    slowContent: false,
-    slowReload: false,
-    missingTexts,
-    excerpt,
-    actual,
-    execution,
-  }
-}
-
-function compactWebMcpEvidence(spec, verdict) {
-  const execution = verdict.execution ?? {}
-  return {
-    engine: 'webmcp',
-    webmcp_tool: spec.tool,
-    webmcp_args: spec.args,
-    webmcp_status: verdict.status,
-    webmcp_reason: verdict.reason,
-    webmcp_result: execution.result ?? null,
-    webmcp_error: execution.error ?? null,
-    webmcp_dialog: execution.dialog ?? null,
-    webmcp_confirmation_requested: spec.confirm === true,
-    webmcp_tools_detected: execution.tools ?? [],
-    elapsed_ms: execution.durationMs ?? null,
-    // `url` alimente evidence_url côté base, sans capture d’écran.
-    url: verdict.finalUrl || null,
-    final_url: verdict.finalUrl || null,
-    expectations: spec.expect ?? {},
-    url_ok: verdict.urlOk,
-    text_ok: verdict.textOk,
-    text_checks: verdict.textChecks,
-    negative_checks: verdict.negativeChecks,
-    actual: verdict.actual,
-    excerpt: verdict.excerpt,
-    cached: false,
-    findings: [],
-    pages: verdict.pages.slice(-3).map((page) => ({
-      url: page.url,
-      title: page.title,
-      excerpt: String(page.excerpt ?? '').slice(0, 2500),
-    })),
-  }
-}
-
-function webMcpStepResults(c, status, verdict, spec) {
-  const steps = c.steps.length ? c.steps : [{ n: 1, action: c.title, expected: 'L’outil WebMCP répond comme attendu' }]
-  const evidence = compactWebMcpEvidence(spec, verdict)
-  const executed = `Outil WebMCP « ${spec.tool} » exécuté sur ${verdict.finalUrl || 'une URL inconnue'} en ${formatMs(verdict.execution?.durationMs)}.`
-
-  return steps.map((step, i) => {
-    let stepStatus = 'passed'
-    let actual = ''
-    if (status === 'passed') {
-      actual = i === 0 ? executed : verdict.actual
-    } else if (status === 'failed') {
-      if (i === 0) {
-        stepStatus = 'passed'
-        actual = executed
-      } else if (i === 1) {
-        stepStatus = 'failed'
-        actual = verdict.actual
-      } else {
-        stepStatus = 'skipped'
-        actual = 'Non exécutée : l’échec a été constaté avant cette étape.'
-      }
-    } else if (status === 'blocked') {
-      if (i === 0) {
-        stepStatus = 'blocked'
-        actual = verdict.actual
-      } else {
-        stepStatus = 'skipped'
-        actual = 'Non exécutée : le parcours n’a pas pu aboutir.'
-      }
-    } else {
-      stepStatus = 'skipped'
-      actual = 'Non exécutée.'
-    }
-    return {
-      n: step.n,
-      code: `${c.code}-${step.n}`,
-      action: step.action,
-      expected: step.expected,
-      actual: String(actual).slice(0, 2000),
-      status: stepStatus,
-      evidence,
-    }
-  })
-}
-
 function compactEvidence(c, goal, run, verdict) {
   const json = run.json
   const lines = json?.cost?.lines ?? []
@@ -961,41 +735,8 @@ try {
       console.log(`  … pause ${Math.round(CASE_DELAY_MS / 1000)} s entre les cas`)
       await sleep(CASE_DELAY_MS)
     }
-    const webmcpSpec = webMcpGoalOf(goal)
-    let run = null
-    let verdict = null
-
-    if (webmcpSpec) {
-      const execution = await runWebMcpTool(probeBrowser, {
-        url: webmcpSpec.url,
-        tool: webmcpSpec.tool,
-        args: webmcpSpec.args,
-        storageState: webmcpSpec.storageState,
-        confirm: webmcpSpec.confirm,
-        timeoutMs: webmcpSpec.timeoutMs,
-        waitMs: webmcpSpec.waitMs,
-      })
-      verdict = verifyWebMcp(webmcpSpec, execution)
-      console.log(`  ${verdict.status.toUpperCase()} (${verdict.reason}) · ${execution.durationMs} ms · outil ${webmcpSpec.tool}`)
-      console.log(`  ${verdict.actual.slice(0, 700)}`)
-      results.push({
-        code: c.code,
-        title: c.title,
-        category: c.category,
-        suite: c.suite,
-        description: c.description,
-        discovered: c.discovered,
-        severity: c.severity,
-        status: verdict.status,
-        note: verdict.note ? String(verdict.note).slice(0, 4000) : verdict.actual.slice(0, 4000),
-        duration_ms: execution.durationMs ?? 0,
-        steps: webMcpStepResults(c, verdict.status, verdict, webmcpSpec),
-      })
-      continue
-    }
-
-    run = await runFastbrowse(c)
-    verdict = await verify(c, goal, run, probeBrowser)
+    const run = await runFastbrowse(c)
+    const verdict = await verify(c, goal, run, probeBrowser)
     console.log(`  ${verdict.status.toUpperCase()} (${verdict.reason}) · ${run.durationMs} ms · ${run.json?.steps?.length ?? '?'} étapes`)
     console.log(`  ${verdict.actual.slice(0, 700)}`)
     const webmcpTools = verdict.probe?.webmcp?.tools ?? []
@@ -1022,17 +763,10 @@ try {
 
 const counts = { passed: 0, failed: 0, blocked: 0, skipped: 0 }
 for (const result of results) counts[result.status] = (counts[result.status] ?? 0) + 1
-const engines = { fastbrowse: 0, webmcp: 0 }
-for (const result of results) {
-  const engine = result.steps?.[0]?.evidence?.engine
-  if (engine === 'webmcp') engines.webmcp += 1
-  else engines.fastbrowse += 1
-}
 const payload = {
   run_id: env('QA_RUN_ID') || null,
   model: env('FASTBROWSE_REPORT_MODEL', 'opencode/deepseek-v4.1-flash+jev-1.13'),
   executor: 'fastbrowse',
-  engines,
   started_at: startedAt.toISOString(),
   finished_at: new Date().toISOString(),
   duration_ms: results.reduce((sum, result) => sum + result.duration_ms, 0),

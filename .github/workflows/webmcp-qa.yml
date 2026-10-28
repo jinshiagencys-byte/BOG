@@ -1,0 +1,187 @@
+name: WebMCP QA — Playwright
+
+# Exécuteur QA instrumenté, distinct du workflow fastbrowse.
+#
+# Playwright ouvre Chrome, la page expose ses outils WebMCP, le runner les
+# exécute et vérifie le résultat avec ses propres assertions.
+# Aucun LLM, aucun Jev, aucune clé OpenCode : pas de budget à surveiller.
+#
+# Deux modes :
+#   • run réel  : manifest_url + run_token + report_url (déclenché par start-run) ;
+#   • démonstration : sans manifest_url, le workflow sert
+#     .github/qa/fixtures/webmcp-demo.html et exécute
+#     .github/qa/webmcp-demo-manifest.json. C'est aussi le mode déclenché par
+#     un push sur les fichiers de démonstration.
+
+on:
+  workflow_dispatch:
+    inputs:
+      qa_run_id:
+        description: "ID du run Supabase (test_runs.id)"
+        required: false
+        type: string
+      manifest_url:
+        description: "URL de l'Edge Function run-manifest (vide = mode démonstration)"
+        required: false
+        type: string
+      run_token:
+        description: "Jeton éphémère du run (x-run-token)"
+        required: false
+        type: string
+      report_url:
+        description: "URL de l'Edge Function report-run"
+        required: false
+        type: string
+      target_url:
+        description: "URL cible par défaut (facultative)"
+        required: false
+        type: string
+      cases_file:
+        description: "Catalogue des objectifs WebMCP"
+        required: false
+        default: ".github/qa/fastbrowse-cases.json"
+        type: string
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/webmcp-qa.yml"
+      - ".github/qa/webmcp-runner.mjs"
+      - ".github/qa/webmcp-executor.mjs"
+      - ".github/qa/webmcp-demo-cases.json"
+      - ".github/qa/webmcp-demo-manifest.json"
+      - ".github/qa/fixtures/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: webmcp-qa-${{ inputs.qa_run_id || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  webmcp-qa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Installer Google Chrome
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v google-chrome >/dev/null 2>&1 \
+            && ! command -v google-chrome-stable >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y wget ca-certificates
+            wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
+              -O /tmp/google-chrome.deb
+            sudo apt-get install -y /tmp/google-chrome.deb
+          fi
+          if command -v google-chrome >/dev/null 2>&1; then
+            google-chrome --version
+          else
+            google-chrome-stable --version
+          fi
+
+      - name: Installer Playwright
+        shell: bash
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/qa-node"
+          npm install --prefix "$RUNNER_TEMP/qa-node" --no-audit --no-fund playwright-core@1.64.1
+          NODE_PATH="$RUNNER_TEMP/qa-node/node_modules" \
+            node -e "console.log('✓ playwright-core', require('playwright-core/package.json').version)"
+
+      - name: Récupérer le manifeste du run
+        if: inputs.manifest_url != ''
+        env:
+          MANIFEST_URL: ${{ inputs.manifest_url }}
+          RUN_TOKEN: ${{ inputs.run_token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${MANIFEST_URL:?manifest_url requis}"
+          : "${RUN_TOKEN:?run_token requis}"
+          curl -fsS --retry 5 --retry-delay 5 \
+            -H "x-run-token: $RUN_TOKEN" "$MANIFEST_URL" -o run_manifest.json
+          jq -e '.cases | type == "array" and length > 0' run_manifest.json >/dev/null
+
+      - name: Préparer la session Playwright
+        id: session
+        env:
+          STORAGE_STATE: ${{ secrets.WEBMCP_STORAGE_STATE }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${STORAGE_STATE:-}" ]; then
+            printf '%s' "$STORAGE_STATE" > "$RUNNER_TEMP/webmcp-storage.json"
+            chmod 600 "$RUNNER_TEMP/webmcp-storage.json"
+            echo "storage=$RUNNER_TEMP/webmcp-storage.json" >> "$GITHUB_OUTPUT"
+            echo "✓ Session Playwright chargée depuis le secret"
+          else
+            echo "ℹ Aucune session fournie : les cas doivent être publics"
+          fi
+
+      - name: Servir la page de démonstration
+        if: inputs.manifest_url == ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m http.server 4173 --bind 127.0.0.1 \
+            --directory .github/qa/fixtures >/tmp/webmcp-demo-server.log 2>&1 &
+          for _ in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:4173/webmcp-demo.html >/dev/null; then
+              echo "✓ Démonstration servie sur http://127.0.0.1:4173"
+              exit 0
+            fi
+            sleep 0.25
+          done
+          echo "::error::Le serveur de démonstration n'a pas démarré"
+          cat /tmp/webmcp-demo-server.log
+          exit 1
+
+      - name: Exécuter les cas WebMCP
+        id: qa
+        env:
+          NODE_PATH: ${{ runner.temp }}/qa-node/node_modules
+          QA_ROOT: ${{ github.workspace }}
+          RUN_MANIFEST: ${{ inputs.manifest_url != '' && 'run_manifest.json' || '' }}
+          WEBMCP_DEMO_MANIFEST: ${{ github.workspace }}/.github/qa/webmcp-demo-manifest.json
+          WEBMCP_CASES: ${{ inputs.manifest_url != '' && format('{0}/{1}', github.workspace, inputs.cases_file) || format('{0}/.github/qa/webmcp-demo-cases.json', github.workspace) }}
+          WEBMCP_PROBE_DIR: ${{ runner.temp }}/qa-node
+          WEBMCP_STORAGE_STATE: ${{ steps.session.outputs.storage }}
+          TARGET_URL: ${{ inputs.target_url || 'http://127.0.0.1:4173/webmcp-demo.html' }}
+          QA_OUTPUT: ${{ github.workspace }}/qa_result.json
+          QA_RUN_ID: ${{ inputs.qa_run_id }}
+          REPORT_URL: ${{ inputs.report_url }}
+          RUN_TOKEN: ${{ inputs.run_token }}
+          WEBMCP_DELAY_MS: "0"
+          GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          set +e
+          node .github/qa/webmcp-runner.mjs
+          CODE=$?
+          echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
+          if [ "$CODE" -ne 0 ]; then
+            echo "::warning::Le runner WebMCP s'est terminé avec le code $CODE"
+          fi
+
+      - name: Archiver les preuves QA
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: webmcp-qa-${{ inputs.qa_run_id || github.run_id }}
+          path: |
+            qa_result.json
+            run_manifest.json
+          if-no-files-found: warn
+          retention-days: 30

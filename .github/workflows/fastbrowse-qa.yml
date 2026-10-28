@@ -7,7 +7,6 @@ name: fastbrowse QA — TestDino-like run
 #
 # Une seule clé est nécessaire : le secret GitHub OPENCODE_API_KEY.
 # Elle alimente le LLM et Jev via OpenCode Console.
-# Un run composé uniquement de cas WebMCP n'utilise ni fastbrowse ni cette clé.
 
 on:
   workflow_dispatch:
@@ -71,41 +70,12 @@ jobs:
             google-chrome-stable --version
           fi
 
-      - name: Choisir l'exécuteur
-        id: executor
-        shell: bash
-        run: |
-          set -euo pipefail
-          # Un cas est WebMCP quand son objectif déclare `webmcp.tool` dans le
-          # fichier de cas. Les autres passent par fastbrowse, qui exige alors
-          # la clé OpenCode.
-          NEEDS=$(jq -r --slurpfile goals .github/qa/fastbrowse-cases.json '
-            [ .cases[]
-              | select((($goals[0][.code] // {}).webmcp.tool // "") == "")
-            ] | length
-          ' run_manifest.json)
-          WEBMCP=$(jq -r --slurpfile goals .github/qa/fastbrowse-cases.json '
-            [ .cases[]
-              | select((($goals[0][.code] // {}).webmcp.tool // "") != "")
-            ] | length
-          ' run_manifest.json)
-          TOTAL=$(jq -r '.cases | length' run_manifest.json)
-          if [ "$NEEDS" -gt 0 ]; then
-            echo "needs_fastbrowse=true" >> "$GITHUB_OUTPUT"
-            echo "🧪 $TOTAL cas, dont $WEBMCP WebMCP : fastbrowse exécute $NEEDS cas"
-          else
-            echo "needs_fastbrowse=false" >> "$GITHUB_OUTPUT"
-            echo "🧪 $TOTAL cas, tous WebMCP : fastbrowse et la clé OpenCode ne sont pas nécessaires"
-          fi
-
       - name: Installer uv
-        if: steps.executor.outputs.needs_fastbrowse == 'true'
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
 
       - name: Construire fastbrowse
-        if: steps.executor.outputs.needs_fastbrowse == 'true'
         shell: bash
         env:
           FASTBROWSE_COMMIT: e46c12a14e5cf5034e69eb7d5a21856eb0f0dc27
@@ -149,7 +119,6 @@ jobs:
           jq -e '.cases | type == "array" and length > 0' run_manifest.json >/dev/null
 
       - name: Vérifier la clé OpenCode
-        if: steps.executor.outputs.needs_fastbrowse == 'true'
         shell: bash
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
@@ -179,7 +148,7 @@ jobs:
           echo "🎯 Cible : $TARGET_URL"
           echo "🧪 Cas : $(jq '.cases | length' run_manifest.json)"
 
-      - name: Exécuter les cas QA
+      - name: Exécuter les cas avec fastbrowse
         id: qa
         env:
           FASTBROWSE_CLI: ${{ github.workspace }}/_fastbrowse/.venv/bin/fastbrowse

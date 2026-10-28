@@ -160,11 +160,18 @@ Deno.serve(async (req) => {
     ?? 'big-pickle';
 
   // fastbrowse est l'exécuteur par défaut. Antigravity reste disponible en
-  // fallback explicite ; IronBee n'est plus déclenché.
-  const executor = body.executor === 'antigravity' ? 'antigravity' : 'fastbrowse';
+  // fallback explicite ; WebMCP/Playwright a son propre workflow ; IronBee
+  // n'est plus déclenché.
+  const executor = body.executor === 'antigravity'
+    ? 'antigravity'
+    : body.executor === 'webmcp'
+      ? 'webmcp'
+      : 'fastbrowse';
   const workflowFile = executor === 'fastbrowse'
     ? 'fastbrowse-qa.yml'
-    : integration.workflow_file || 'antigravity-qa.yml';
+    : executor === 'webmcp'
+      ? 'webmcp-qa.yml'
+      : integration.workflow_file || 'antigravity-qa.yml';
 
   // Le manifeste SQL reste figé sur son ancien libellé ; on aligne la ligne du
   // run tout de suite pour que l'UI et les rapports partiels soient cohérents.
