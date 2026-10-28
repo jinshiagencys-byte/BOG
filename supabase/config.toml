@@ -21,6 +21,10 @@ verify_jwt = false
 [functions.upload-evidence]
 verify_jwt = false
 
+# Appelée par pg_cron avec x-purge-secret, jamais par le navigateur.
+[functions.purge-evidence]
+verify_jwt = false
+
 # Envoi d'un email d'invitation depuis le navigateur (JWT utilisateur).
 [functions.send-invite-email]
 verify_jwt = true

@@ -149,6 +149,43 @@ l'exécuteur `webmcp`.
 Rétention : une vidéo pèse quelques centaines de Ko. À 1 Go de stockage gratuit, prévoir
 une purge (par exemple ne garder que les runs échoués, ou 30 jours).
 
+## Rétention des preuves
+
+La purge tourne dans Supabase, pas dans la CI : `pg_cron` appelle chaque nuit à 03:17 UTC
+la fonction `purge-evidence`, qui supprime les fichiers du bucket via l'API Storage.
+
+| Cas | Conservation |
+| --- | --- |
+| Run réussi, bloqué ou ignoré | 30 jours |
+| Run échoué | 90 jours |
+| Objet orphelin (run supprimé) | 30 jours après le dépôt |
+
+`qa_evidence_expired` liste les chemins échus ; `purge-evidence` les supprime par lots de
+500 (3 lots maximum par passage, le reste part le lendemain).
+
+Le secret partagé est stocké dans Vault (`evidence_purge_secret`), jamais dans le dépôt.
+La tâche ne fait rien tant qu'il n'existe pas. Pour le poser ou le tourner :
+
+```sh
+# 1. secret d'appel de la fonction
+supabase secrets set PURGE_SECRET=<valeur> --project-ref <ref>
+
+# 2. copie pour pg_cron
+select vault.create_secret('<valeur>', 'evidence_purge_secret', 'purge-evidence');
+```
+
+Contrôle manuel, sans rien supprimer :
+
+```sh
+curl -sS -X POST https://<ref>.supabase.co/functions/v1/purge-evidence \
+  -H 'Content-Type: application/json' \
+  -H 'x-purge-secret: <valeur>' \
+  -d '{"dry_run": true}'
+```
+
+`run_id` limite la purge à une exécution et `retention_days` abaisse le seuil : pratique
+pour vérifier la suppression réelle sur un run jetable.
+
 ## Lancer depuis l'application
 
 `start-run` accepte `executor: "webmcp"` et déclenche `webmcp-qa.yml`. Le rapport est
@@ -223,4 +260,6 @@ node .github/qa/webmcp-runner.mjs
 - `.github/qa/webmcp-demo-cases.json` / `webmcp-demo-manifest.json` — jeu de démo ;
 - `.github/qa/playwright-cases.json` / `playwright-odjafrik-manifest.json` — jeu odjafrik ;
 - `supabase/functions/upload-evidence/index.ts` — dépôt des vidéos dans le bucket privé ;
-- `supabase/migrations/20261028130000_v2_11_qa_evidence.sql` — bucket + policy de lecture.
+- `supabase/functions/purge-evidence/index.ts` — suppression des preuves échues ;
+- `supabase/migrations/20261028130000_v2_11_qa_evidence.sql` — bucket + policy de lecture ;
+- `supabase/migrations/20261028140000_v2_12_evidence_retention.sql` — rétention et tâche cron.
