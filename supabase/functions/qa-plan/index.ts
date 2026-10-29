@@ -15,7 +15,7 @@ import { serviceClient, sha256Hex } from '../_shared/supabase.ts';
 
 const MAX_BYTES = 256 * 1024;
 const TIMEOUT_MS = 90_000;
-const MAX_TOKENS = 4096;
+const MAX_TOKENS = 8192;
 
 type Provider = {
   label: string;

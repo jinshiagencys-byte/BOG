@@ -32,10 +32,13 @@ Décris ce qu'il faut vérifier dans "checks", en phrases générales (par exemp
 "au moins un produit est listé", "les prix sont croissants"), sans y citer de
 valeur précise : les valeurs observées vont uniquement dans "mustSee".
 N'invente aucun produit, prix, libellé ni sélecteur.
-Réponds uniquement par un objet JSON de la forme :
+Réponds uniquement par un objet JSON compact, une entrée par code, sans texte
+autour :
 {"CODE": {"motif": "...", "reason": "...", "checks": ["..."], "mustSee": ["..."], "mustNotSee": ["..."]}}
 "mustSee" ne doit contenir que des textes présents dans les faits (titre, prix,
-libellé de tri, état, nom de vendeur). "mustNotSee" sert aux messages d'erreur.`
+libellé de tri, état, nom de vendeur). "mustNotSee" sert aux messages d'erreur.
+Reste bref : au plus 3 "checks" de 12 mots, un "reason" de 15 mots, 3 "mustSee"
+et 2 "mustNotSee" par cas. La réponse entière doit rester compacte.`
 
 function clean(value, max = 300) {
   return String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, max)
@@ -305,6 +308,9 @@ export async function planCases({
   // appel direct avec la clé fournie par l'environnement.
   if (!proxy && (!apiKey || !endpoint || !model)) return null
   const messages = buildPlanMessages({ profile, cases })
+  // Un plan couvre un cas par entrée : sept cas sur un même site dépassent
+  // largement 3 200 tokens de sortie, et le JSON revient tronqué (fin=length).
+  const maxTokens = Math.max(2400, Math.min(8192, 1200 + (cases?.length ?? 0) * 900))
 
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
@@ -322,8 +328,9 @@ export async function planCases({
             model,
             temperature: 0,
             // Les modèles de raisonnement consomment des tokens avant de
-            // répondre : un plafond trop bas renvoie un contenu vide.
-            max_tokens: 3200,
+            // répondre : un plafond trop bas renvoie un contenu vide ou
+            // tronqué.
+            max_tokens: maxTokens,
             messages,
           }),
           signal: controller.signal,
@@ -338,7 +345,7 @@ export async function planCases({
           body: JSON.stringify({
             model,
             temperature: 0,
-            max_tokens: 3200,
+            max_tokens: maxTokens,
             messages,
           }),
           signal: controller.signal,

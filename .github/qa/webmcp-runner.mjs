@@ -407,6 +407,9 @@ function verifyWebMcp(spec, execution) {
   }))
   const negative = negativeChecks.find((check) => check.matched)?.pattern ?? null
   const urlOk = !expect.url || new RegExp(expect.url, 'i').test(url)
+  // Les vérifications de valeurs collectées concernent surtout les scénarios,
+  // mais le verdict doit garder la même forme des deux côtés.
+  const collectedChecks = checkCollected(expect, execution)
 
   let parsed = response
   if (typeof parsed === 'string') {

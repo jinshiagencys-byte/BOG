@@ -259,6 +259,10 @@ jobs:
           # 0 = cas exécutés, 1 = rapport refusé, 2 = configuration invalide.
           # Un échec de cas ne fait pas échouer le job : le verdict est dans
           # qa_result.json. Une erreur de configuration, si.
+          if [ "$CODE" -eq 1 ] && [ ! -s qa_result.json ]; then
+            echo "::error::Le runner a échoué avant de produire un résultat"
+            exit 1
+          fi
           if [ "$CODE" -eq 1 ]; then
             echo "::warning::Le rapport QA a été refusé (code 1)"
           elif [ "$CODE" -ne 0 ]; then
