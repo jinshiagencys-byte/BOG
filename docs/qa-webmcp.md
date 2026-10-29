@@ -10,6 +10,34 @@ instrumentés (odjafrik.com, par exemple) : mêmes vidéos, mêmes verdicts, mê
 Aucun LLM, aucun Jev, aucune clé OpenCode : pas de budget à surveiller et pas de limite
 de crédits.
 
+## Antigravity + WebMCP (décideur LLM)
+
+Le workflow `.github/workflows/antigravity-qa.yml` est la seconde architecture : **c'est
+Antigravity qui décide**, et les outils WebMCP de la page exécutent.
+
+- `.github/qa/webmcp-mcp-server.mjs` est un serveur MCP local (stdio, JSON-RPC 2.0) déclaré
+  dans `~/.gemini/config/mcp_config.json`. Il se branche sur le Chrome du run via
+  `WEBMCP_CDP_URL` et expose `webmcp_open`, `webmcp_list_tools`, `webmcp_call_tool` et
+  `webmcp_read_page`.
+- `webmcp_call_tool` n'accepte une confirmation de mutation que sur `confirm: true` ; sinon
+  il la refuse et l'outil renvoie `cancelled`.
+- `webmcp_read_page` fait défiler la page et vérifie que chaque texte attendu est
+  réellement amené à l'écran.
+- Une page qui n'expose aucun outil WebMCP retombe sur le sous-agent navigateur natif
+  `browser` (Chrome DevTools/CDP) pour ce cas.
+- Le LLM passe par un proxy Gemini -> OpenAI Chat Completions neutre
+  (`.github/qa/llm-gemini-proxy.mjs`) : TokenHarbor par défaut (`TOKENHARBOR_API_KEY`),
+  sinon OpenCode Zen (`OPENCODE_API_KEY`), sinon `ANTIGRAVITY_LLM_BASE_URL` /
+  `ANTIGRAVITY_LLM_MODEL`.
+- `playwright-core` n'y sert que de client CDP au serveur MCP, jamais d'exécuteur de
+  scénario.
+
+| | `webmcp-qa.yml` | `antigravity-qa.yml` |
+|---|---|---|
+| Décideur | scénario déterministe | Antigravity (LLM) |
+| Surface | outils WebMCP ou étapes Playwright | outils WebMCP, repli navigateur |
+| Clé LLM | aucune (plan facultatif) | TokenHarbor ou OpenCode |
+
 ## Pourquoi un workflow séparé
 
 | | `fastbrowse-qa.yml` | `webmcp-qa.yml` |
