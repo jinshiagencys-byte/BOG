@@ -1,0 +1,66 @@
+name: Audit odjafrik
+
+# Audit fonctionnel de bout en bout d'un site réel (odjafrik.com par défaut),
+# exécuté depuis une IP propre (runner GitHub) pour ne pas être rate-limité par
+# sa propre IP. Chaque scénario agit puis vérifie : routes profondes, accès
+# direct à /auth/login, connexion, recherche, listings, page produit, panier.
+# Un 429 est classé « blocked », jamais « failed ».
+#
+# Déclenchement manuel : aucun champ obligatoire.
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: "URL de base du site à auditer"
+        required: false
+        default: "https://odjafrik.com"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: odjafrik-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Installer Google Chrome
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v google-chrome >/dev/null 2>&1 \
+            && ! command -v google-chrome-stable >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y wget ca-certificates
+            wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -O /tmp/google-chrome.deb
+            sudo apt-get install -y /tmp/google-chrome.deb
+          fi
+          google-chrome --version 2>/dev/null || google-chrome-stable --version
+
+      - name: Audit fonctionnel
+        shell: bash
+        env:
+          AUDIT_BASE_URL: ${{ github.event.inputs.base_url || 'https://odjafrik.com' }}
+          QA_OUTPUT_DIR: qa-out-odjafrik
+        run: node .github/qa/odjafrik-audit.mjs
+
+      - name: Publier le rapport
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: odjafrik-audit
+          path: qa-out-odjafrik
+          if-no-files-found: warn
+          retention-days: 14

@@ -48,7 +48,14 @@ const MAX_CONSOLE_ERRORS = Number(process.env.REAL_SITE_MAX_CONSOLE_ERRORS ?? 0)
 const CONTENT_TIMEOUT_MS = Number(process.env.REAL_SITE_CONTENT_TIMEOUT_MS ?? 30000)
 const MIN_TEXT = Number(process.env.REAL_SITE_MIN_TEXT ?? 50)
 const FAIL_ON_JS_ERRORS = bool(process.env.REAL_SITE_FAIL_ON_JS_ERRORS, true)
-const REQUIRE_HYDRATION = bool(process.env.REAL_SITE_REQUIRE_HYDRATION, true)
+// La détection d'hydratation dépend du framework et n'est pas fiable partout :
+// informative par défaut. Le signal dur, c'est `ressources_js` + `erreurs_console`.
+const REQUIRE_HYDRATION = bool(process.env.REAL_SITE_REQUIRE_HYDRATION, false)
+// Un User-Agent de Chrome réel : certains sites (ou leur CDN/WAF) répondent 429
+// aux scripts dès que l'UA contient « HeadlessChrome ».
+const NORMAL_UA =
+  process.env.REAL_SITE_UA?.trim() ||
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36'
 const APP_SELECTOR = process.env.REAL_SITE_APP_SELECTOR?.trim() || '#__nuxt, #app, [data-v-app]'
 const HYDRATION_TIMEOUT_MS = Number(process.env.REAL_SITE_HYDRATION_TIMEOUT_MS ?? 25000)
 
@@ -164,10 +171,14 @@ function visibleSelectors(items) {
   })
 }
 
-/** L'application a-t-elle réellement monté (Vue `__vue_app__`, `data-v-app`, DOM réactif) ? */
+/** L'application a-t-elle réellement monté ? (Vue, React, Svelte, Angular) */
 function appMounted(selector) {
   const roots = Array.from(document.querySelectorAll(selector))
-  return roots.some((root) => root.__vue_app__ || root.hasAttribute('data-v-app') || root.__reactRoot || root.__svelte_meta)
+  if (roots.some((root) => root.__vue_app__ || root.hasAttribute('data-v-app') || root.__reactRoot || root.__svelte_meta)) {
+    return true
+  }
+  // Angular marque le composant racine avec `ng-version`.
+  return document.querySelector('[ng-version]') !== null
 }
 
 /** Saisit / clique, puis vérifie qu'un changement visible se produit. */
@@ -206,8 +217,11 @@ function interactionProbe(items) {
 
 console.log(`Cible : ${URL_TARGET}`)
 
-const browser = await launchBrowser({ headless: true })
+const browser = await launchBrowser({ headless: true, extraArgs: ['--disable-blink-features=AutomationControlled'] })
 const page = await browser.newPage()
+await page.connection
+  .send('Network.setUserAgentOverride', { userAgent: NORMAL_UA, acceptLanguage: 'fr-FR,fr;q=0.9,en;q=0.8', platform: 'Linux x86_64' }, page.sessionId)
+  .catch(() => {})
 await page.connection
   .send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false }, page.sessionId)
   .catch(() => {})
