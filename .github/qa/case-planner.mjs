@@ -125,6 +125,61 @@ function observed(value, factsJson) {
   return factsJson.toLowerCase().includes(needle)
 }
 
+/**
+ * Faits qu’un motif peut légitimement exiger de voir. Sans ce filtre, le LLM
+ * peut demander « 0 produits trouvés » sur une recherche qui doit justement
+ * renvoyer des produits : l’assertion serait fausse, même si le texte existe
+ * ailleurs dans le profil.
+ */
+function allowedForMotif(motif, profile) {
+  const values = []
+  const push = (value) => {
+    if (value) values.push(String(value))
+  }
+  switch (motif) {
+    case 'search':
+      push(profile?.search?.sampleTerm)
+      push(profile?.site?.currency)
+      for (const product of profile?.products ?? []) {
+        push(product.title)
+        push(product.priceText)
+      }
+      break
+    case 'empty-search':
+      push(profile?.search?.emptyText)
+      push(profile?.emptyState)
+      break
+    case 'product':
+      push(profile?.product?.title)
+      push(profile?.product?.cardTitle)
+      push(profile?.product?.priceText)
+      push(profile?.product?.availability)
+      push(profile?.product?.addToCart)
+      push(profile?.product?.seller)
+      break
+    case 'catalog':
+      push(profile?.site?.currency)
+      for (const option of profile?.catalog?.sort?.options ?? []) push(option)
+      break
+    case 'catalog-sort':
+      for (const option of profile?.catalog?.sort?.options ?? []) push(option)
+      push(profile?.site?.currency)
+      break
+    case 'sellers':
+      push(profile?.sellersPage?.countText)
+      push(profile?.sellersPage?.emptyText)
+      push(profile?.sellersPage?.heading)
+      for (const seller of profile?.sellers ?? []) push(seller.name)
+      break
+    case 'navigation':
+      for (const item of profile?.navigation ?? []) push(item.label)
+      break
+    default:
+      break
+  }
+  return values
+}
+
 /** Textes qu’un cas peut réellement exiger de voir à l’écran. */
 function mustSeeFacts(profile) {
   const values = []
@@ -165,10 +220,13 @@ export async function planCases({
   endpoint,
   apiKey,
   model,
+  proxy = null,
   timeoutMs = 60000,
   extraHeaders = {},
 }) {
-  if (!apiKey || !endpoint || !model) return null
+  // Deux transports : un relais serveur (`proxy`) qui détient la clé, ou un
+  // appel direct avec la clé fournie par l'environnement.
+  if (!proxy && (!apiKey || !endpoint || !model)) return null
   const facts = factsForPlan(profile)
   const factsJson = JSON.stringify(facts)
   const mustSeeJson = JSON.stringify(mustSeeFacts(profile))
@@ -186,42 +244,74 @@ export async function planCases({
     })),
   }
 
+  const messages = [
+    { role: 'system', content: SYSTEM },
+    { role: 'user', content: JSON.stringify(payload) },
+  ]
+
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   let response
   try {
-    response = await fetch(`${String(endpoint).replace(/\/+$/, '')}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${apiKey}`,
-        ...extraHeaders,
-      },
-      body: JSON.stringify({
-        model,
-        temperature: 0,
-        max_tokens: 1600,
-        messages: [
-          { role: 'system', content: SYSTEM },
-          { role: 'user', content: JSON.stringify(payload) },
-        ],
-      }),
-      signal: controller.signal,
-    })
+    response = proxy
+      ? await fetch(proxy.url, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-run-token': proxy.token,
+            ...extraHeaders,
+          },
+          body: JSON.stringify({
+            model,
+            temperature: 0,
+            // Les modèles de raisonnement consomment des tokens avant de
+            // répondre : un plafond trop bas renvoie un contenu vide.
+            max_tokens: 3200,
+            messages,
+          }),
+          signal: controller.signal,
+        })
+      : await fetch(`${String(endpoint).replace(/\/+$/, '')}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            authorization: `Bearer ${apiKey}`,
+            ...extraHeaders,
+          },
+          body: JSON.stringify({
+            model,
+            temperature: 0,
+            max_tokens: 3200,
+            messages,
+          }),
+          signal: controller.signal,
+        })
   } finally {
     clearTimeout(timer)
   }
 
   const body = await response.json().catch(() => null)
   if (!response.ok) {
-    const message = body?.error?.message ?? `HTTP ${response.status}`
+    // Le relais renvoie { error: "CODE", detail: "..." }.
+    const message =
+      body?.detail ??
+      body?.error?.message ??
+      (typeof body?.error === 'string' ? body.error : null) ??
+      body?.message ??
+      `HTTP ${response.status}`
     throw new Error(`plan LLM refusé : ${clean(message, 300)}`)
   }
 
-  const parsed = extractJson(body?.choices?.[0]?.message?.content)
+  // Le relais renvoie { content } ; un fournisseur direct, choices[0].
+  const content = proxy ? body?.content : body?.choices?.[0]?.message?.content
+  const parsed = extractJson(content)
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    const finish = proxy
+      ? body?.finish_reason ?? 'inconnu'
+      : body?.choices?.[0]?.finish_reason ?? 'inconnu'
+    const tokens = body?.usage?.completion_tokens ?? '?'
     throw new Error(
-      `plan LLM illisible (JSON attendu) : ${clean(body?.choices?.[0]?.message?.content, 300)}`,
+      `plan LLM illisible (JSON attendu, fin=${finish}, ${tokens} tokens) : ${clean(content, 300)}`,
     )
   }
 
@@ -229,9 +319,19 @@ export async function planCases({
   for (const [code, entry] of Object.entries(parsed)) {
     if (!entry || typeof entry !== 'object') continue
     const motif = MOTIFS.has(entry.motif) ? entry.motif : null
+    const allowed = allowedForMotif(motif, profile)
     const mustSee = (Array.isArray(entry.mustSee) ? entry.mustSee : [])
       .map((value) => clean(value, 160))
-      .filter((value) => value && observed(value, mustSeeJson))
+      .filter(
+        (value) =>
+          value &&
+          observed(value, mustSeeJson) &&
+          allowed.some(
+            (fact) =>
+              fact.toLowerCase().includes(value.toLowerCase()) ||
+              value.toLowerCase().includes(fact.toLowerCase()),
+          ),
+      )
       .slice(0, 6)
     const mustNotSee = (Array.isArray(entry.mustNotSee) ? entry.mustNotSee : [])
       .map((value) => clean(value, 160))
@@ -251,7 +351,7 @@ export async function planCases({
 
   return {
     plan,
-    model,
+    model: body?.model ?? model ?? 'inconnu',
     usage: body?.usage ?? null,
   }
 }

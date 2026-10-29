@@ -101,6 +101,8 @@ const VIDEO_DIR = env('WEBMCP_VIDEO_DIR') ? resolve(env('WEBMCP_VIDEO_DIR')) : n
 const VIDEO_TAIL_MS = Number(env('WEBMCP_VIDEO_TAIL_MS', '700'))
 const EVIDENCE_UPLOAD_URL = env('EVIDENCE_UPLOAD_URL')
 const PROFILE_SAVE_URL = env('PROFILE_SAVE_URL')
+// Relais serveur du plan LLM : la clé du fournisseur reste côté Supabase.
+const PLAN_URL = env('PLAN_URL')
 const EXPLORE_MODE = env('WEBMCP_EXPLORE', 'auto')
 const RUN_TOKEN = env('RUN_TOKEN')
 // Session optionnelle (site derrière une connexion) : les cas et
@@ -110,29 +112,47 @@ const DEFAULT_STORAGE_STATE = expandEnv(env('WEBMCP_STORAGE_STATE')) || null
 // script ; le scénario exécuté reste déterministe.
 const PLAN_MODE = env('WEBMCP_PLAN', 'auto')
 
-function planProvider() {
+/** Fournisseurs LLM disponibles, essayés dans l’ordre. */
+function planProviders() {
+  const providers = []
+  // Le relais serveur passe en premier : il détient la clé et n’expose rien
+  // dans le workflow.
+  if (PLAN_URL && RUN_TOKEN) {
+    providers.push({ label: 'relais', proxy: { url: PLAN_URL, token: RUN_TOKEN } })
+  }
   if (env('WEBMCP_PLAN_ENDPOINT')) {
-    return {
+    providers.push({
+      label: 'plan',
       endpoint: env('WEBMCP_PLAN_ENDPOINT'),
       key: env('WEBMCP_PLAN_KEY') || env('OPENCODE_API_KEY') || env('OPENROUTER_API_KEY'),
       model: env('WEBMCP_PLAN_MODEL', 'deepseek-v4.1-flash'),
-    }
+    })
   }
   if (env('OPENCODE_API_KEY')) {
-    return {
+    providers.push({
+      label: 'opencode',
       endpoint: env('OPENCODE_BASE_URL', 'https://opencode.ai/inference/openai/v1'),
       key: env('OPENCODE_API_KEY'),
       model: env('OPENCODE_MODEL', 'deepseek-v4.1-flash'),
-    }
+    })
   }
   if (env('OPENROUTER_API_KEY')) {
-    return {
+    providers.push({
+      label: 'openrouter',
       endpoint: env('OPENROUTER_BASE_URL', 'https://openrouter.ai/api/v1'),
       key: env('OPENROUTER_API_KEY'),
-      model: env('OPENROUTER_MODEL', 'deepseek/deepseek-chat-v3.1:free'),
-    }
+      model: env('OPENROUTER_MODEL', 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free'),
+    })
   }
-  return null
+  // Un même fournisseur ne doit pas être tenté deux fois.
+  const seen = new Set()
+  return providers.filter((provider) => {
+    const id = provider.proxy ? `proxy|${provider.proxy.url}` : `${provider.endpoint}|${provider.model}`
+    if (!provider.proxy && !provider.key) return false
+    if (seen.has(id)) return false
+    seen.add(id)
+    return true
+  })
 }
 const ONLY = env('CASE_CODES', '').split(',').map((value) => value.trim()).filter(Boolean)
 
@@ -219,28 +239,44 @@ function applyEnrichments({ rebuild = false, llmPlan = null } = {}) {
 /** Demande au LLM un schéma de vérification, à partir des faits observés. */
 async function planFor(siteProfile) {
   if (PLAN_MODE === 'off') return null
-  const provider = planProvider()
-  if (!provider?.key) {
+  const providers = planProviders()
+  if (!providers.length) {
     if (PLAN_MODE === 'on') console.log('  ⚠ plan LLM demandé mais aucune clé disponible')
     return null
   }
-  try {
-    const result = await planCases({
-      profile: siteProfile,
-      cases,
-      endpoint: provider.endpoint,
-      apiKey: provider.key,
-      model: provider.model,
-    })
-    console.log(
-      `  🧠 plan LLM : ${Object.keys(result.plan).length} cas (${result.model})`,
-    )
-    return result.plan
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    console.log(`  ⚠ plan LLM ignoré : ${message.slice(0, 200)}`)
-    return null
+  for (const provider of providers) {
+    // Un modèle gratuit sature vite : une seconde tentative suffit souvent.
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      try {
+        const result = await planCases(
+          provider.proxy
+            ? { profile: siteProfile, cases, proxy: provider.proxy, timeoutMs: 90000 }
+            : {
+                profile: siteProfile,
+                cases,
+                endpoint: provider.endpoint,
+                apiKey: provider.key,
+                model: provider.model,
+                timeoutMs: 90000,
+              },
+        )
+        console.log(
+          `  🧠 plan LLM : ${Object.keys(result.plan).length} cas (${result.model})`,
+        )
+        return result.plan
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        const retry = attempt === 1
+        console.log(
+          `  ⚠ plan LLM ${provider.label}${retry ? ' (nouvel essai)' : ''} : ${message.slice(0, 200)}`,
+        )
+        if (!retry) break
+        await new Promise((resolve) => setTimeout(resolve, 4000))
+      }
+    }
   }
+  // Tous les fournisseurs ont échoué : le scénario déterministe reste valable.
+  return null
 }
 
 function explorationWanted() {
@@ -494,7 +530,14 @@ function verifyPlaywright(spec, execution) {
   const excerpt = cleanText(text, 1200)
   const label = spec.label || 'le scénario'
   const error = cleanText(execution.error, 500)
-  const networkLike = /net::|econn|err_|failed to load|timeout/i.test(error)
+  // Un délai dépassé n’est pas toujours un problème réseau : un clic qui
+  // n’aboutit pas est un défaut d’interface. Seuls le chargement de page et
+  // les vraies erreurs réseau restent « bloqués ».
+  const navigationTimeout = /page\.goto|waitforurl|waiting for navigation|navigation/i.test(error)
+  const networkLike =
+    /net::|econn|enotfound|eai_again|etimedout|socket hang up|failed to fetch|fetch failed|err_(internet|connection|name|network|empty_response|timed_out|failed)/i.test(
+      error,
+    ) || (/timeout/i.test(error) && navigationTimeout)
   const actions = execution.steps ?? []
   const httpErrors = Array.isArray(execution.httpErrors) ? execution.httpErrors : []
   const rateLimited = httpErrors.filter((item) => item.status === 429)

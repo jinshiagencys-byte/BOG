@@ -25,6 +25,11 @@ verify_jwt = false
 [functions.save-site-profile]
 verify_jwt = false
 
+# Relais du plan LLM : la clé du fournisseur reste côté serveur, le runner
+# s'authentifie avec le jeton éphémère du run.
+[functions.qa-plan]
+verify_jwt = false
+
 # Appelée par pg_cron avec x-purge-secret, jamais par le navigateur.
 [functions.purge-evidence]
 verify_jwt = false

@@ -348,8 +348,9 @@ function buildSellers(profile) {
   if (!url) return null
 
   // Annuaire vide : on vérifie ce que la page affiche réellement (compteur ou
-  // état vide), au lieu d’attendre un vendeur qui n’est pas listé.
-  if (!names.length) {
+  // état vide), au lieu d’attendre un vendeur qui n’est pas listé. `listed`
+  // vaut 0 quand les noms viennent seulement des fiches produit.
+  if (!names.length || page?.listed === 0) {
     const expected = page?.countText || page?.emptyText || page?.heading
     if (!expected) return null
     return {

@@ -47,6 +47,10 @@ on:
         description: "URL de l'Edge Function save-site-profile (profil d'exploration, facultative)"
         required: false
         type: string
+      plan_url:
+        description: "URL de l'Edge Function qa-plan (relais LLM, facultative)"
+        required: false
+        type: string
       target_url:
         description: "URL cible par défaut (facultative)"
         required: false
@@ -191,10 +195,15 @@ jobs:
           RUN_TOKEN: ${{ inputs.run_token }}
           EVIDENCE_UPLOAD_URL: ${{ inputs.evidence_upload_url }}
           PROFILE_SAVE_URL: ${{ inputs.profile_save_url }}
+          PLAN_URL: ${{ inputs.plan_url }}
           WEBMCP_PLAN: auto
+          # Premier fournisseur : OpenCode. Repli : OpenRouter (modèle gratuit)
+          # si la clé est configurée. Sans clé, le scénario déterministe suffit.
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           OPENCODE_BASE_URL: https://opencode.ai/inference/openai/v1
           OPENCODE_MODEL: deepseek-v4.1-flash
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_MODEL: nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free
           WEBMCP_DELAY_MS: "0"
           WEBMCP_VIDEO_DIR: ${{ github.workspace }}/qa-videos
           WEBMCP_VIDEO_TAIL_MS: "700"

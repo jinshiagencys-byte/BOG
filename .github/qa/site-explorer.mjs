@@ -584,11 +584,12 @@ export async function exploreSite(probe, options = {}) {
         const sellersPage = await visit(new URL(sellersLink.path, origin).toString())
         const countText =
           (sellersPage.body.match(/([\d\s.,]+)\s*(vendeurs?|artisans?|boutiques?|résultats?)/i) || [])[0] ?? null
+        const directoryEmpty = emptyStateFrom(sellersPage.body)
         profile.sellersPage = {
           url: sellersPage.url,
           heading: clean(sellersPage.heading, 160),
           countText: countText ? clean(countText, 80) : null,
-          emptyText: emptyStateFrom(sellersPage.body),
+          emptyText: directoryEmpty,
         }
         const names = []
         const seen = new Set()
@@ -605,13 +606,19 @@ export async function exploreSite(probe, options = {}) {
           seen.add(card.seller)
           names.push(card.seller)
         }
-        profile.sellers = names.slice(0, 8).map((name) => ({ name: clean(name, 80), sourceUrl: sellersPage.url }))
+        // `listed` distingue ce que l'annuaire affiche vraiment des vendeurs
+        // repris des fiches produit : un annuaire vide ne doit pas être testé
+        // comme s'il listait un vendeur.
+        profile.sellersPage.listed = names.length
+        profile.sellers = names
+          .slice(0, 8)
+          .map((name) => ({ name: clean(name, 80), sourceUrl: sellersPage.url, source: 'directory' }))
         if (!profile.sellers.length) {
           const seen = new Set()
           for (const product of profile.products) {
             if (!product.seller || seen.has(product.seller)) continue
             seen.add(product.seller)
-            profile.sellers.push({ name: product.seller, sourceUrl: product.href })
+            profile.sellers.push({ name: product.seller, sourceUrl: product.href, source: 'product' })
           }
           if (profile.sellers.length) {
             profile.issues.push(

@@ -187,6 +187,7 @@ Deno.serve(async (req) => {
   if (executor === 'webmcp') {
     inputs.evidence_upload_url = `${supabaseUrl}/functions/v1/upload-evidence`;
     inputs.profile_save_url = `${supabaseUrl}/functions/v1/save-site-profile`;
+    inputs.plan_url = `${supabaseUrl}/functions/v1/qa-plan`;
   }
   if (executor === 'antigravity') inputs.model = model;
 
