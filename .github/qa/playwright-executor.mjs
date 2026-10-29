@@ -19,14 +19,16 @@ function safeName(value) {
 }
 
 function locatorFor(page, step) {
-  if (step.selector) return page.locator(step.selector).first()
-  if (step.placeholder) return page.getByPlaceholder(step.placeholder).first()
-  if (step.label) return page.getByLabel(step.label).first()
-  if (step.text) return page.getByText(step.text, { exact: step.exact === true }).first()
-  if (step.role) {
-    return page.getByRole(step.role, step.name ? { name: step.name } : {}).first()
-  }
-  throw new Error(`Sélecteur manquant pour l’action « ${step.action} »`)
+  let base = null
+  if (step.selector) base = page.locator(step.selector)
+  else if (step.placeholder) base = page.getByPlaceholder(step.placeholder)
+  else if (step.label) base = page.getByLabel(step.label)
+  else if (step.text) base = page.getByText(step.text, { exact: step.exact === true })
+  else if (step.role) base = page.getByRole(step.role, step.name ? { name: step.name } : {})
+  if (!base) throw new Error(`Sélecteur manquant pour l’action « ${step.action} »`)
+  // Un même libellé peut exister dans un menu mobile masqué : cliquer la
+  // première occurrence reviendrait à viser un élément invisible.
+  return base.filter({ visible: true }).first()
 }
 
 async function scrollThrough(page, { steps = 8, pauseMs = 250, selector = null } = {}) {
@@ -70,12 +72,15 @@ async function perform(page, step, timeout, collected) {
     case 'click':
       return locatorFor(page, step).click({ timeout })
     case 'waitForText': {
-      const locator = page.getByText(step.text, { exact: step.exact === true }).first()
+      const locator = page
+        .getByText(step.text, { exact: step.exact === true })
+        .filter({ visible: true })
+        .first()
       await locator.scrollIntoViewIfNeeded({ timeout: Number(step.timeoutMs ?? timeout) }).catch(() => {})
       return locator.waitFor({ state: 'visible', timeout: Number(step.timeoutMs ?? timeout) })
     }
     case 'waitForSelector': {
-      const locator = page.locator(step.selector).first()
+      const locator = page.locator(step.selector).filter({ visible: true }).first()
       await locator.scrollIntoViewIfNeeded({ timeout: Number(step.timeoutMs ?? timeout) }).catch(() => {})
       return locator.waitFor({ state: 'visible', timeout: Number(step.timeoutMs ?? timeout) })
     }
