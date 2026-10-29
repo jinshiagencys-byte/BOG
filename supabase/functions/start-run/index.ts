@@ -159,19 +159,16 @@ Deno.serve(async (req) => {
     ?? configuredModel
     ?? 'big-pickle';
 
-  // fastbrowse est l'exécuteur par défaut. Antigravity reste disponible en
-  // fallback explicite ; WebMCP/Playwright a son propre workflow ; IronBee
-  // n'est plus déclenché.
-  const executor = body.executor === 'antigravity'
+  // fastbrowse est l'exécuteur par défaut. Antigravity (décideur LLM + outils
+  // WebMCP) reste sélectionnable explicitement. L'ancien exécuteur WebMCP
+  // Playwright a été retiré : une demande `webmcp` pointe désormais sur le
+  // workflow Antigravity. IronBee n'est plus déclenché.
+  const executor = body.executor === 'antigravity' || body.executor === 'webmcp'
     ? 'antigravity'
-    : body.executor === 'webmcp'
-      ? 'webmcp'
-      : 'fastbrowse';
+    : 'fastbrowse';
   const workflowFile = executor === 'fastbrowse'
     ? 'fastbrowse-qa.yml'
-    : executor === 'webmcp'
-      ? 'webmcp-qa.yml'
-      : integration.workflow_file || 'antigravity-qa.yml';
+    : integration.workflow_file || 'antigravity-qa.yml';
 
   // Le manifeste SQL reste figé sur son ancien libellé ; on aligne la ligne du
   // run tout de suite pour que l'UI et les rapports partiels soient cohérents.
@@ -183,12 +180,6 @@ Deno.serve(async (req) => {
     report_url: reportUrl,
     target_url: site.site_url ?? '',
   };
-  // Les preuves vidéo ne concernent que l'exécuteur Playwright/WebMCP.
-  if (executor === 'webmcp') {
-    inputs.evidence_upload_url = `${supabaseUrl}/functions/v1/upload-evidence`;
-    inputs.profile_save_url = `${supabaseUrl}/functions/v1/save-site-profile`;
-    inputs.plan_url = `${supabaseUrl}/functions/v1/qa-plan`;
-  }
   if (executor === 'antigravity') inputs.model = model;
 
   try {

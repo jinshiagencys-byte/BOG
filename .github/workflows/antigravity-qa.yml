@@ -128,19 +128,6 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH"
           agy --version
 
-      - name: Installer Playwright (client CDP du serveur WebMCP)
-        shell: bash
-        env:
-          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
-        run: |
-          set -euo pipefail
-          # Le serveur MCP WebMCP n'utilise playwright-core que comme client CDP :
-          # aucun navigateur à télécharger, on réutilise le Chrome du run.
-          mkdir -p "$RUNNER_TEMP/qa-node"
-          npm install --prefix "$RUNNER_TEMP/qa-node" --no-audit --no-fund playwright-core@1.64.1
-          NODE_PATH="$RUNNER_TEMP/qa-node/node_modules" \
-            node -e "console.log('✓ playwright-core', require('playwright-core/package.json').version)"
-
       - name: Configurer Antigravity (Gemini-compatible, navigateur natif)
         shell: bash
         run: |
@@ -175,8 +162,6 @@ jobs:
       - name: Déclarer le serveur MCP WebMCP
         env:
           STORAGE_STATE: ${{ secrets.WEBMCP_STORAGE_STATE }}
-          PROBE_DIR: ${{ runner.temp }}/qa-node
-          NODE_MODULES: ${{ runner.temp }}/qa-node/node_modules
         shell: bash
         run: |
           set -euo pipefail
@@ -193,9 +178,6 @@ jobs:
           workspace = os.environ["GITHUB_WORKSPACE"]
           env = {
               "WEBMCP_CDP_URL": os.environ["WEBMCP_CDP_URL"],
-              "WEBMCP_PROBE_DIR": os.environ["PROBE_DIR"],
-              "NODE_PATH": os.environ["NODE_MODULES"],
-              "WEBMCP_VIDEO_DIR": os.path.join(workspace, "videos"),
               # Par défaut, une confirmation de mutation est refusée : l'agent
               # doit l'accepter explicitement, comme un utilisateur prudent.
               "WEBMCP_CONFIRM": "dismiss",

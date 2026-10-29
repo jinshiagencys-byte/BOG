@@ -105,9 +105,9 @@ produits ? »). Inversement, `Aucun produit trouvé` ou `0 produits trouvés` pr
 - Les cas cartographiés sont dans `.github/qa/fastbrowse-cases.json` (objectifs, textes
   attendus, `probeUrl`, seuils `maxContentMs`/`maxWaitMs`). Les cas non cartographiés
   utilisent un objectif générique construit depuis leur titre et leurs étapes.
-- La sonde `.github/qa/page-probe.mjs` ouvre la page en parallèle avec Playwright/Chrome,
-  mesure le temps d'affichage, recharge la page et relève la console. Elle reste
-  indépendante du modèle.
+- La sonde `.github/qa/page-probe.mjs` ouvre la page en parallèle dans Chrome (client CDP
+  brut, sans Playwright), mesure le temps d'affichage, recharge la page et relève la
+  console. Elle reste indépendante du modèle.
 - Les erreurs réseau (`429`, `ECONNRESET`, timeouts) donnent `blocked` avec un retry
   borné uniquement quand fastbrowse n'a produit ni JSON ni verdict ; un `429` dans une
   page déjà chargée n'est jamais rejoué. Ces erreurs ne sont pas maquillées en échec
@@ -129,8 +129,9 @@ chemins d'exécution coexistent :
 
 Le workflow lance Chrome en mode headless avec `--remote-debugging-port=0`,
 `--enable-features=WebMCPTesting` et un profil dédié ; le sous-agent s'y connecte via
-`--autoConnect` et le serveur MCP WebMCP s'y branche via `WEBMCP_CDP_URL`. `playwright-core`
-n'est utilisé que comme client CDP par ce serveur MCP, jamais comme exécuteur de scénario.
+`--autoConnect` et le serveur MCP WebMCP s'y branche via `WEBMCP_CDP_URL`. Le pilotage de
+Chrome se fait par `.github/qa/cdp-client.mjs`, un client Chrome DevTools Protocol minimal :
+aucune dépendance Playwright n'est utilisée, ni comme client, ni comme exécuteur.
 L'agent principal coordonne les cas, agrège les observations et écrit `qa_result.json`.
 
 Antigravity ne sait parler qu'à un endpoint **Gemini-compatible**. Le workflow démarre
@@ -167,7 +168,7 @@ Chaîne complète :
    `fastbrowse-qa.yml` (ou `antigravity-qa.yml` si `executor: "antigravity"`) avec
    `run_id`, `manifest_url` et `run_token`.
 4. Le workflow récupère le manifeste, construit un objectif par cas, lance fastbrowse en
-   CLI, puis passe la page à la sonde Playwright indépendante.
+   CLI, puis passe la page à la sonde CDP indépendante.
 5. fastbrowse et la sonde alimentent `qa_result.json` : par cas, `status`, `severity`,
    `steps[].n`, `steps[].actual`, `steps[].evidence` (`url`, `http_status`, `console`,
    `content_ms`, `product_count`, …) ; au niveau global, `side_effects`.

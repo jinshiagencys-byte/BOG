@@ -11,8 +11,8 @@
  * sur stdin/stdout. La journalisation part sur stderr pour ne jamais polluer le
  * flux du protocole.
  *
- * Playwright n'est ici qu'un client CDP : ce n'est ni un scénario, ni un
- * décideur. Deux modes de connexion :
+ * Il n'a aucune dépendance : il pilote Chrome via `.github/qa/cdp-client.mjs`
+ * (WebSocket natif de Node), pas via Playwright. Deux modes de connexion :
  *   • `WEBMCP_CDP_URL` fourni  -> on se branche sur le Chrome déjà lancé
  *     (celui du sous-agent navigateur d'Antigravity) ;
  *   • sinon                    -> on lance notre propre Chrome headless.
@@ -21,33 +21,20 @@
  * `document.modelContext` n'existe pas dans Chrome stable.
  */
 
-import { existsSync, mkdirSync } from 'node:fs'
-import { createRequire } from 'node:module'
-import { join } from 'node:path'
+import { existsSync, readFileSync } from 'node:fs'
 import { performance } from 'node:perf_hooks'
-
-const require = createRequire(import.meta.url)
+import { setTimeout as delay } from 'node:timers/promises'
+import { connectBrowser, launchBrowser } from './cdp-client.mjs'
 
 const env = (name, fallback = null) => {
   const value = process.env[name]
   return value === undefined || value === '' ? fallback : value
 }
-const truthy = new Set(['1', 'true', 'yes', 'on'])
 
-const PROBE_DIR = env('WEBMCP_PROBE_DIR', join(process.cwd(), 'node_modules'))
 const CDP_URL = env('WEBMCP_CDP_URL')
 const STORAGE_STATE = env('WEBMCP_STORAGE_STATE')
-const VIDEO_DIR = env('WEBMCP_VIDEO_DIR')
 const HEADLESS = !['0', 'false', 'no', 'off'].includes(String(env('WEBMCP_HEADLESS', 'true')).toLowerCase())
 const CONFIRM_DEFAULT = ['accept', 'true', '1'].includes(String(env('WEBMCP_CONFIRM', 'dismiss')).toLowerCase())
-const VIDEO_TAIL_MS = Number(env('WEBMCP_VIDEO_TAIL_MS', '700')) || 0
-
-const WEBMCP_ARGS = [
-  '--no-sandbox',
-  '--disable-dev-shm-usage',
-  '--disable-gpu',
-  '--enable-features=WebMCPTesting',
-]
 
 function log(...args) {
   process.stderr.write(`${new Date().toISOString()} [webmcp-mcp] ${args.join(' ')}\n`)
@@ -57,128 +44,32 @@ function messageOf(error) {
   return error instanceof Error ? error.message : String(error ?? 'erreur inconnue')
 }
 
-function safeName(value) {
-  return String(value || 'page').replace(/[^A-Za-z0-9._-]+/g, '-').slice(0, 80)
-}
-
-function loadPlaywright() {
-  for (const name of ['playwright-core', 'patchright', 'playwright']) {
-    try {
-      const mod = require(join(PROBE_DIR, 'node_modules', name))
-      if (mod?.chromium) return mod
-    } catch {
-      // continue
-    }
-  }
-  try {
-    const mod = require('playwright-core')
-    if (mod?.chromium) return mod
-  } catch {
-    // continue
-  }
-  return null
-}
-
-function chromePath() {
-  const candidates = [
-    env('CHROME_PATH'),
-    '/usr/bin/google-chrome',
-    '/usr/bin/google-chrome-stable',
-    '/opt/google/chrome/chrome',
-    '/usr/bin/chromium',
-    '/usr/bin/chromium-browser',
-  ].filter(Boolean)
-  return candidates.find((candidate) => existsSync(candidate)) ?? null
-}
-
 // ---------------------------------------------------------------------------
 // État navigateur
 
-let playwright = null
 let browser = null
-let context = null
 let page = null
-let contextOwned = false
-const consoleErrors = []
-const httpErrors = []
-let dialog = null
 
-async function ensureContext() {
-  if (context) return context
-  playwright = playwright || loadPlaywright()
-  if (!playwright) throw new Error('playwright-core introuvable (définis WEBMCP_PROBE_DIR ou NODE_PATH)')
-
-  if (CDP_URL) {
-    browser = await playwright.chromium.connectOverCDP(CDP_URL)
-    contextOwned = false
-    context = browser.contexts()[0] ?? (await browser.newContext())
-    log(`branché sur le Chrome existant ${CDP_URL}`)
-  } else {
-    const executablePath = chromePath()
-    if (!executablePath) throw new Error('Google Chrome introuvable')
-    browser = await playwright.chromium.launch({ executablePath, headless: HEADLESS, args: WEBMCP_ARGS })
-    contextOwned = true
-    context = await browser.newContext({
-      locale: 'fr-FR',
-      viewport: { width: 1280, height: 720 },
-      ...(VIDEO_DIR ? { recordVideo: { dir: join(VIDEO_DIR, '.tmp'), size: { width: 1280, height: 720 } } } : {}),
-      ...(STORAGE_STATE && existsSync(STORAGE_STATE) ? { storageState: STORAGE_STATE } : {}),
-    })
-    log(`Chrome lancé (${executablePath}, headless=${HEADLESS})`)
-  }
-  return context
+async function ensureBrowser() {
+  if (browser && !browser.closed) return browser
+  browser = CDP_URL ? await connectBrowser(CDP_URL) : await launchBrowser({ headless: HEADLESS })
+  log(CDP_URL ? `branché sur le Chrome existant ${CDP_URL}` : `Chrome lancé (${browser.executablePath ?? 'chrome'}, headless=${HEADLESS})`)
+  return browser
 }
 
 async function activePage() {
-  await ensureContext()
-  if (!page || page.isClosed()) {
-    page = await context.newPage()
-    wirePage(page)
+  const current = await ensureBrowser()
+  if (page) return page
+  page = await current.newPage()
+  if (STORAGE_STATE && existsSync(STORAGE_STATE)) {
+    try {
+      await page.applyStorageState(JSON.parse(readFileSync(STORAGE_STATE, 'utf8')))
+      log(`état de session appliqué depuis ${STORAGE_STATE}`)
+    } catch (error) {
+      log(`état de session ignoré : ${messageOf(error)}`)
+    }
   }
   return page
-}
-
-function wirePage(target) {
-  target.on('console', (message) => {
-    if (message.type() === 'error' && consoleErrors.length < 25) consoleErrors.push(message.text().slice(0, 300))
-  })
-  target.on('pageerror', (error) => {
-    if (consoleErrors.length < 25) consoleErrors.push(`Uncaught: ${messageOf(error)}`.slice(0, 300))
-  })
-  target.on('response', (response) => {
-    if (response.status() < 400 || httpErrors.length >= 30) return
-    httpErrors.push({ status: response.status(), url: response.url().slice(0, 300) })
-  })
-  // Les mutations WebMCP passent par `window.confirm`. La politique par défaut
-  // refuse la mutation : l'agent doit l'accepter explicitement, comme un
-  // utilisateur prudent.
-  target.on('dialog', async (current) => {
-    dialog = { type: current.type(), message: current.message(), accepted: pendingConfirm }
-    try {
-      if (pendingConfirm) await current.accept()
-      else await current.dismiss()
-    } catch {
-      // La page a pu se fermer entre-temps.
-    }
-  })
-}
-
-let pendingConfirm = CONFIRM_DEFAULT
-
-async function saveVideo(current) {
-  if (!VIDEO_DIR || !current) return null
-  try {
-    const video = current.video()
-    if (!video) return null
-    await current.close()
-    const target = join(VIDEO_DIR, `${safeName(current.__webmcpName || `page-${Date.now()}`)}.webm`)
-    mkdirSync(VIDEO_DIR, { recursive: true })
-    await video.saveAs(target)
-    return target
-  } catch (error) {
-    log(`vidéo non enregistrée : ${messageOf(error)}`)
-    return null
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -186,10 +77,10 @@ async function saveVideo(current) {
 
 async function listWebMcpTools(target, { waitFor = null, timeoutMs = 8000 } = {}) {
   const deadline = Date.now() + timeoutMs
-  let rows = []
   while (true) {
-    rows = await target
-      .evaluate(async () => {
+    let rows = null
+    try {
+      rows = await target.callFunction(async () => {
         if (!document.modelContext || typeof document.modelContext.getTools !== 'function') return null
         try {
           const tools = await document.modelContext.getTools()
@@ -204,14 +95,19 @@ async function listWebMcpTools(target, { waitFor = null, timeoutMs = 8000 } = {}
           return { __error: String(error?.message ?? error) }
         }
       })
-      .catch(() => null)
-
-    if (rows === null) return { available: false, tools: [], reason: 'document.modelContext absent (flag WebMCPTesting ?)' }
-    if (!Array.isArray(rows)) return { available: true, tools: [], reason: rows.__error ?? 'getTools a échoué' }
+    } catch {
+      rows = null
+    }
+    if (rows === null) {
+      return { available: false, tools: [], reason: 'document.modelContext absent (flag WebMCPTesting ?)' }
+    }
+    if (!Array.isArray(rows)) {
+      return { available: true, tools: [], reason: rows.__error ?? 'getTools a échoué' }
+    }
     if (!waitFor || rows.some((tool) => tool.name === waitFor) || Date.now() >= deadline) {
       return { available: true, tools: rows }
     }
-    await target.waitForTimeout(250)
+    await delay(250)
   }
 }
 
@@ -220,58 +116,74 @@ async function scrollThrough(target, { steps = 8, pauseMs = 250 } = {}) {
   const pause = Math.max(0, Math.min(2000, Number(pauseMs)))
   let previous = -1
   for (let index = 0; index < total; index += 1) {
-    const height = await target.evaluate(() => document.documentElement.scrollHeight).catch(() => 0)
-    const viewport = await target.evaluate(() => window.innerHeight).catch(() => 720)
-    await target
-      .evaluate(({ y }) => window.scrollTo(0, y), { y: Math.min(height, (index + 1) * viewport * 0.85) })
-      .catch(() => {})
-    if (pause) await target.waitForTimeout(pause)
-    if (height === previous && index > 1) break
-    previous = height
+    const metrics = await target
+      .callFunction((step) => {
+        const height = document.documentElement.scrollHeight
+        const viewport = window.innerHeight
+        window.scrollTo(0, Math.min(height, (step + 1) * viewport * 0.85))
+        return { height, viewport }
+      }, index)
+      .catch(() => ({ height: 0, viewport: 720 }))
+    if (pause) await delay(pause)
+    if (metrics.height === previous && index > 1) break
+    previous = metrics.height
   }
-  await target.evaluate(() => window.scrollTo(0, 0)).catch(() => {})
+  await target.evaluate('window.scrollTo(0, 0)').catch(() => {})
 }
 
-// Un texte présent dans le DOM mais jamais amené à l'écran ne compte pas :
-// on le fait défiler jusqu'à la fenêtre et on vérifie sa boîte.
-async function checkVisibleTexts(target, patterns) {
-  const viewport = target.viewportSize() ?? { width: 1280, height: 720 }
-  const checks = []
-  for (const pattern of patterns) {
-    const locator = target.getByText(new RegExp(pattern, 'i'))
-    let found = 0
-    try {
-      found = await locator.count()
-    } catch {
-      found = 0
+// Un texte présent dans le DOM mais jamais amené à l'écran ne compte pas : on
+// le fait défiler jusqu'à la fenêtre et on vérifie sa boîte. Tout se passe dans
+// la page, en un seul aller-retour CDP.
+function visibleTextChecks(patterns) {
+  const findMatches = (re) => {
+    const out = []
+    const visit = (element) => {
+      const text = element.textContent || ''
+      if (!re.test(text)) return
+      let descended = false
+      for (const child of element.children) {
+        if (re.test(child.textContent || '')) {
+          descended = true
+          visit(child)
+        }
+      }
+      if (!descended) out.push(element)
     }
+    if (document.body) visit(document.body)
+    return out
+  }
+  return patterns.map((pattern) => {
+    let re
+    try {
+      re = new RegExp(pattern, 'i')
+    } catch {
+      return { pattern, found: 0, visible: false, inViewport: false, error: 'regex-invalide' }
+    }
+    const matches = findMatches(re)
     let visible = false
     let inViewport = false
-    const limit = Math.min(found, 8)
-    for (let index = 0; index < limit; index += 1) {
-      const node = locator.nth(index)
-      const box = await node.boundingBox().catch(() => null)
-      if (!box) continue
-      await node.scrollIntoViewIfNeeded({ timeout: 5000 }).catch(() => {})
-      const nodeVisible = await node.isVisible().catch(() => false)
-      if (!nodeVisible) continue
-      const after = await node.boundingBox().catch(() => null)
-      if (
-        after &&
-        after.y + Math.min(after.height, 4) >= 0 &&
-        after.y <= viewport.height &&
-        after.x < viewport.width &&
-        after.x + Math.min(after.width, 4) >= 0
-      ) {
+    for (const element of matches.slice(0, 8)) {
+      const style = window.getComputedStyle(element)
+      if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') continue
+      let rect = element.getBoundingClientRect()
+      if (rect.width === 0 && rect.height === 0) continue
+      try {
+        element.scrollIntoView({ block: 'center', inline: 'center' })
+      } catch {
+        // Défilement impossible : on garde la mesure précédente.
+      }
+      rect = element.getBoundingClientRect()
+      const intersects =
+        rect.bottom >= 0 && rect.top <= window.innerHeight && rect.right >= 0 && rect.left <= window.innerWidth
+      if (intersects) {
         visible = true
         inViewport = true
         break
       }
       visible = true
     }
-    checks.push({ pattern, found, visible, inViewport })
-  }
-  return checks
+    return { pattern, found: matches.length, visible, inViewport }
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -342,19 +254,14 @@ async function callTool(name, args = {}) {
     case 'webmcp_open': {
       const url = String(args.url || '').trim()
       if (!url) throw new Error('url requise')
-      if (page && VIDEO_DIR) await saveVideo(page)
-      else if (page && !page.isClosed()) await page.close().catch(() => {})
+      if (page) await page.close().catch(() => {})
       page = null
-      dialog = null
-      consoleErrors.length = 0
-      httpErrors.length = 0
       const target = await activePage()
-      target.__webmcpName = safeName(url)
-      await target.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 })
-      await target.waitForTimeout(1500)
+      await target.goto(url, { timeoutMs: 45000 })
+      await delay(1500)
       const listed = await listWebMcpTools(target)
       return textResult({
-        url: target.url(),
+        url: await target.url(),
         title: await target.title().catch(() => ''),
         webmcpAvailable: listed.available,
         tools: listed.tools,
@@ -364,16 +271,17 @@ async function callTool(name, args = {}) {
     case 'webmcp_list_tools': {
       const target = await activePage()
       const listed = await listWebMcpTools(target)
-      return textResult({ url: target.url(), ...listed })
+      return textResult({ url: await target.url(), ...listed })
     }
     case 'webmcp_call_tool': {
       const tool = String(args.tool || '').trim()
       if (!tool) throw new Error('tool requis')
       const input = args.arguments && typeof args.arguments === 'object' ? args.arguments : {}
-      const previous = pendingConfirm
-      pendingConfirm = typeof args.confirm === 'boolean' ? args.confirm : CONFIRM_DEFAULT
       const target = await activePage()
       const started = performance.now()
+      const previous = target.acceptDialog
+      target.acceptDialog = typeof args.confirm === 'boolean' ? args.confirm : CONFIRM_DEFAULT
+      target.dialog = null
       try {
         const listed = await listWebMcpTools(target, { waitFor: tool })
         if (!listed.tools.some((row) => row.name === tool)) {
@@ -382,55 +290,55 @@ async function callTool(name, args = {}) {
             true,
           )
         }
-        const execution = await target.evaluate(
-          async ({ name, value }) => {
-            const rows = await document.modelContext.getTools()
-            const found = rows.find((row) => row.name === name)
-            if (!found) return { ok: false, error: 'tool-not-found' }
+        const execution = await target.callFunction(async ({ name: toolName, value }) => {
+          const rows = await document.modelContext.getTools()
+          const found = rows.find((row) => row.name === toolName)
+          if (!found) return { ok: false, error: 'tool-not-found' }
+          try {
+            return { ok: true, result: await document.modelContext.executeTool(found, JSON.stringify(value)) }
+          } catch (first) {
             try {
-              return { ok: true, result: await document.modelContext.executeTool(found, JSON.stringify(value)) }
-            } catch (first) {
-              try {
-                return { ok: true, result: await document.modelContext.executeTool(found, value) }
-              } catch (second) {
-                const describe = (error) => String(error?.message ?? error)
-                return { ok: false, error: describe(second), firstError: describe(first) }
-              }
+              return { ok: true, result: await document.modelContext.executeTool(found, value) }
+            } catch (second) {
+              const describe = (error) => String(error?.message ?? error)
+              return { ok: false, error: describe(second), firstError: describe(first) }
             }
+          }
+        }, { name: tool, value: input })
+        return textResult(
+          {
+            ok: execution.ok === true,
+            tool,
+            arguments: input,
+            result: execution.result ?? null,
+            dialog: target.dialog,
+            url: await target.url(),
+            durationMs: Math.round(performance.now() - started),
+            ...(execution.ok ? {} : { error: execution.error, firstError: execution.firstError }),
           },
-          { name: tool, value: input },
+          execution.ok !== true,
         )
-        return textResult({
-          ok: execution.ok === true,
-          tool,
-          arguments: input,
-          result: execution.result ?? null,
-          dialog,
-          url: target.url(),
-          durationMs: Math.round(performance.now() - started),
-          ...(execution.ok ? {} : { error: execution.error, firstError: execution.firstError }),
-        }, execution.ok !== true)
       } finally {
-        pendingConfirm = previous
+        target.acceptDialog = previous
       }
     }
     case 'webmcp_read_page': {
       const target = await activePage()
       if (args.url) {
-        await target.goto(String(args.url), { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {})
-        await target.waitForTimeout(1200)
+        await target.goto(String(args.url), { timeoutMs: 45000 }).catch(() => {})
+        await delay(1200)
       }
       await scrollThrough(target)
-      const text = await target.locator('body').innerText({ timeout: 5000 }).catch(() => '')
+      const text = await target.bodyText()
       const expected = Array.isArray(args.expected) ? args.expected.map((item) => String(item)) : []
-      const checks = expected.length ? await checkVisibleTexts(target, expected) : []
+      const checks = expected.length ? await target.callFunction(visibleTextChecks, expected).catch(() => []) : []
       return textResult({
-        url: target.url(),
+        url: await target.url(),
         title: await target.title().catch(() => ''),
         text: String(text).replace(/\s+\n/g, '\n').slice(0, 8000),
         visible: checks,
-        consoleErrors: [...new Set(consoleErrors)].slice(0, 12),
-        httpErrors: httpErrors.slice(0, 12),
+        consoleErrors: [...new Set(target.consoleErrors)].slice(0, 12),
+        httpErrors: target.httpErrors.slice(0, 12),
       })
     }
     default:
@@ -491,9 +399,7 @@ async function handle(message) {
 
 async function shutdown(code = 0) {
   try {
-    if (page && VIDEO_DIR) await saveVideo(page)
-    if (contextOwned && context) await context.close().catch(() => {})
-    if (contextOwned && browser) await browser.close().catch(() => {})
+    if (browser) await browser.close()
   } catch {
     // Rien à faire : on quitte.
   }

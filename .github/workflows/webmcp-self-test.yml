@@ -1,0 +1,62 @@
+name: WebMCP MCP — auto-test
+
+# Valide le serveur MCP WebMCP sans Playwright, sans LLM et sans secret :
+# il lance Chrome, sert la page de démonstration du dépôt, exerce les quatre
+# outils MCP (`webmcp_open`, `webmcp_list_tools`, `webmcp_call_tool`,
+# `webmcp_read_page`) et vérifie découverte, mutation confirmée/refusée,
+# visibilité réelle et erreurs.
+#
+# Déclenchement manuel immédiat : aucun champ à saisir.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/webmcp-self-test.yml"
+      - ".github/qa/webmcp-mcp-server.mjs"
+      - ".github/qa/cdp-client.mjs"
+      - ".github/qa/webmcp-self-test.mjs"
+      - ".github/qa/fixtures/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: webmcp-self-test-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  webmcp-self-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Installer Google Chrome
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v google-chrome >/dev/null 2>&1 \
+            && ! command -v google-chrome-stable >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y wget ca-certificates
+            wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
+              -O /tmp/google-chrome.deb
+            sudo apt-get install -y /tmp/google-chrome.deb
+          fi
+          if command -v google-chrome >/dev/null 2>&1; then
+            google-chrome --version
+          else
+            google-chrome-stable --version
+          fi
+
+      - name: Auto-test du serveur MCP WebMCP
+        shell: bash
+        run: node .github/qa/webmcp-self-test.mjs

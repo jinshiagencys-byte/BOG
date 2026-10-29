@@ -174,9 +174,9 @@ recharge automatiquement. Les RPC continuent d’appliquer la hiérarchie
 owner > admin > member, indépendamment de l’agent.
 
 Côté QA, un cas peut déclarer `webmcp.tool` dans
-`.github/qa/fastbrowse-cases.json` : le workflow séparé `webmcp-qa.yml` exécute
-l’outil avec Playwright et applique ses propres assertions, sans fastbrowse ni
-clé OpenCode. Voir `docs/qa-webmcp.md`.
+`.github/qa/fastbrowse-cases.json` : le workflow `antigravity-qa.yml` fait décider
+Antigravity, puis exécute l’outil via le serveur MCP WebMCP, sans fastbrowse ni
+Playwright. Voir `docs/qa-webmcp.md`.
 
 Pour tester localement dans Chrome 149+ : activer
 `chrome://flags/#enable-webmcp-testing` puis relancer le navigateur. En

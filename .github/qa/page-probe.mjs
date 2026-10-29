@@ -1,73 +1,30 @@
 /**
- * Sonde de page indépendante du modèle.
+ * Sonde de page indépendante du modèle — client CDP brut, sans Playwright.
  *
  * fastbrowse/Jev décide du parcours. Cette sonde répond à deux questions que le
  * verdict de l'agent ne mesure pas : « le contenu attendu est-il réellement
  * affiché ? » et « combien de temps le client a-t-il attendu ? ».
  *
- * Elle utilise Google Chrome via `playwright-core`, installé à côté du runner
- * (ou exposé par NODE_PATH en CI). Aucun réseau social, aucun secret :
- * uniquement l'URL cible.
+ * Elle pilote Google Chrome via `.github/qa/cdp-client.mjs` (WebSocket natif de
+ * Node). Aucun réseau social, aucun secret : uniquement l'URL cible.
  */
-import { existsSync } from 'node:fs'
-import { createRequire } from 'node:module'
-import { join } from 'node:path'
 import { performance } from 'node:perf_hooks'
+import { launchBrowser } from './cdp-client.mjs'
 
-const require = createRequire(import.meta.url)
-
-function loadPlaywright(probeDir) {
-  for (const name of ['playwright-core', 'patchright']) {
-    try {
-      const mod = require(join(probeDir, 'node_modules', name))
-      if (mod?.chromium) return mod
-    } catch {
-      // continue
-    }
-  }
+export async function openProbe() {
   try {
-    const mod = require('playwright-core')
-    if (mod?.chromium) return mod
-  } catch {
-    // continue
-  }
-  return null
-}
-
-function chromePath() {
-  const candidates = [
-    process.env.CHROME_PATH,
-    '/usr/bin/google-chrome',
-    '/usr/bin/google-chrome-stable',
-    '/opt/google/chrome/chrome',
-    '/usr/bin/chromium',
-    '/usr/bin/chromium-browser',
-  ].filter(Boolean)
-  return candidates.find((candidate) => existsSync(candidate)) ?? null
-}
-
-export async function openProbe(probeDir) {
-  const playwright = loadPlaywright(probeDir)
-  if (!playwright) {
-    return { available: false, reason: 'playwright-core introuvable (installe-le ou définis NODE_PATH)' }
-  }
-  const executablePath = chromePath()
-  if (!executablePath) {
-    return { available: false, reason: 'Google Chrome introuvable' }
-  }
-  try {
-    const browser = await playwright.chromium.launch({
-      executablePath,
-      headless: true,
-      args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--enable-features=WebMCPTesting'],
-    })
-    return { available: true, browser, executablePath }
+    const browser = await launchBrowser({ headless: true })
+    return { available: true, browser, executablePath: browser.executablePath }
   } catch (error) {
     return {
       available: false,
       reason: error instanceof Error ? error.message : String(error),
     }
   }
+}
+
+function asPatternList(value) {
+  return Array.isArray(value) ? value.map((item) => String(item)) : []
 }
 
 export async function probeUrl(probe, options) {
@@ -83,21 +40,22 @@ export async function probeUrl(probe, options) {
     maxWaitMs = 15000,
   } = options
 
-  const context = await probe.browser.newContext({
-    locale: 'fr-FR',
-    viewport: { width: 1440, height: 900 },
-  })
-  const page = await context.newPage()
-  const consoleErrors = []
-  page.on('console', (message) => {
-    if (message.type() === 'error') consoleErrors.push(message.text())
-  })
-  page.on('pageerror', (error) => {
-    consoleErrors.push(`Uncaught: ${error.message}`)
+  const page = await probe.browser.newPage()
+  const sessionId = page.sessionId
+  let httpStatus = null
+
+  // Statut HTTP du document principal : dernier `Document` chargé.
+  const offResponse = page.connection.on('Network.responseReceived', (params, sid) => {
+    if (sid !== sessionId || params.type !== 'Document') return
+    if (Number.isInteger(params.response?.status)) httpStatus = params.response.status
   })
 
+  await page.connection
+    .send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false }, sessionId)
+    .catch(() => {})
+  await page.connection.send('Emulation.setLocaleOverride', { locale: 'fr-FR' }, sessionId).catch(() => {})
+
   const started = performance.now()
-  let httpStatus = null
   let navError = null
   let textContent = ''
   let contentMs = null
@@ -105,31 +63,23 @@ export async function probeUrl(probe, options) {
   let negative = null
 
   try {
-    const response = await page.goto(url, {
-      waitUntil: 'domcontentloaded',
-      timeout: 30000,
-    })
-    httpStatus = response?.status() ?? null
+    await page.goto(url, { timeoutMs: 30000 })
   } catch (error) {
     navError = error instanceof Error ? error.message : String(error)
   }
 
-  const expected = text.map((pattern) => new RegExp(pattern, 'i'))
-  const forbidden = failIfText.map((pattern) => new RegExp(pattern, 'i'))
+  const expected = asPatternList(text).map((pattern) => new RegExp(pattern, 'i'))
+  const forbidden = asPatternList(failIfText).map((pattern) => new RegExp(pattern, 'i'))
 
   async function waitForContent(until) {
     let lastText = ''
     while (true) {
-      try {
-        lastText = await page.locator('body').innerText({ timeout: 1500 })
-      } catch {
-        lastText = ''
-      }
+      lastText = await page.bodyText()
       if (expected.length === 0 || expected.every((re) => re.test(lastText))) {
         return { matched: true, text: lastText }
       }
       if (performance.now() >= until) return { matched: false, text: lastText }
-      await page.waitForTimeout(200)
+      await new Promise((resolve) => setTimeout(resolve, 200))
     }
   }
 
@@ -143,7 +93,7 @@ export async function probeUrl(probe, options) {
   if (matched) {
     const reloadStarted = performance.now()
     try {
-      await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 })
+      await page.reload({ timeoutMs: 30000 })
     } catch {
       // Le contrôle de contenu ci-dessous dira si le rechargement a abouti.
     }
@@ -153,13 +103,7 @@ export async function probeUrl(probe, options) {
     if (reloadMatched) reloadContentMs = Math.round(performance.now() - reloadStarted)
   }
 
-  if (!textContent) {
-    try {
-      textContent = await page.locator('body').innerText({ timeout: 1500 })
-    } catch {
-      textContent = ''
-    }
-  }
+  if (!textContent) textContent = await page.bodyText()
 
   for (const re of forbidden) {
     const hit = re.exec(textContent)
@@ -169,13 +113,19 @@ export async function probeUrl(probe, options) {
     }
   }
 
-  const finalUrl = page.url()
+  let finalUrl = url
+  try {
+    finalUrl = await page.url()
+  } catch {
+    // On garde l'URL demandée.
+  }
   const durationMs = Math.round(performance.now() - started)
 
   // WebMCP : si la cible expose des outils (Chrome 149+ avec le flag), on les
   // remonte pour que le runner puisse les exploiter. Aucune exécution ici.
-  const webmcp = await page
-    .evaluate(async () => {
+  let webmcp = { available: false, tools: [] }
+  try {
+    const listed = await page.callFunction(async () => {
       if (!document.modelContext || typeof document.modelContext.getTools !== 'function') {
         return { available: false, tools: [] }
       }
@@ -194,9 +144,13 @@ export async function probeUrl(probe, options) {
         return { available: true, tools: [], error: String(error?.message ?? error) }
       }
     })
-    .catch((error) => ({ available: false, tools: [], error: String(error?.message ?? error) }))
+    if (listed) webmcp = listed
+  } catch {
+    // La page a pu se fermer ou bloquer l'évaluation.
+  }
 
-  await context.close().catch(() => {})
+  offResponse()
+  await page.close().catch(() => {})
 
   return {
     available: true,
@@ -211,8 +165,8 @@ export async function probeUrl(probe, options) {
     matched,
     reloadMatched,
     negative,
-    text: textContent.slice(0, 8000),
-    consoleErrors: [...new Set(consoleErrors)].slice(0, 12),
+    text: String(textContent).slice(0, 8000),
+    consoleErrors: [...new Set(page.consoleErrors)].slice(0, 12),
     webmcp,
   }
 }

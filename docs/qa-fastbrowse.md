@@ -29,8 +29,8 @@ Le workflow `.github/workflows/fastbrowse-qa.yml` attend le secret de dépôt
 Le workflow recopie cette clé dans `TYPESAFE_API_KEY` et
 `FASTBROWSE_LLM_API_KEY`. C'est la seule clé à recharger quand le solde est épuisé.
 
-Les cas instrumentés WebMCP ne passent pas par ce workflow : ils ont leur propre
-exécuteur Playwright, sans clé OpenCode. Voir `docs/qa-webmcp.md`.
+Les cas instrumentés WebMCP ne passent pas par ce workflow : Antigravity décide et les
+outils WebMCP de la page exécutent. Voir `docs/qa-webmcp.md`.
 
 ### En local
 
@@ -74,26 +74,26 @@ relancer de batch QA complet avant que ce test unitaire passe.
 
 1. `start-run` déclenche `fastbrowse-qa.yml` et transmet `run_id`, `manifest_url`,
    `run_token` et `report_url`.
-2. Le workflow installe Chrome et `playwright-core@1.64.1`, clone fastbrowse au commit
-   épinglé `e46c12a14e5cf5034e69eb7d5a21856eb0f0dc27` (version 0.6.0, absente de PyPI,
+2. Le workflow installe Chrome, puis clone fastbrowse au commit épinglé
+   `e46c12a14e5cf5034e69eb7d5a21856eb0f0dc27` (version 0.6.0, absente de PyPI,
    donc installée depuis le dépôt Git).
 3. `.github/qa/fastbrowse-runner.mjs` exécute chaque cas avec un objectif explicite
    (`.github/qa/fastbrowse-cases.json`), `--local`, `--max-steps 25`,
    `--max-dollars 0.10`, délai de 120 s par cas.
-4. La sonde `.github/qa/page-probe.mjs` ouvre la même URL en parallèle, attend le texte
-   attendu, recharge la page et mesure `contentMs` / `reloadContentMs`, l'HTTP et la
-   console.
+4. La sonde `.github/qa/page-probe.mjs` (client CDP brut, sans Playwright) ouvre la même
+   URL en parallèle, attend le texte attendu, recharge la page et mesure `contentMs` /
+   `reloadContentMs`, l'HTTP et la console.
 5. Le runner garde la propriété des assertions : fastbrowse ne valide pas un cas à lui
    seul. Les textes attendus, les textes interdits, l'URL, le seuil de 5 s et la console
    sont vérifiés par le runner et la sonde.
 6. Le rapport est envoyé à `report-run` avec `executor: "fastbrowse"`.
 7. La sonde lance Chrome avec `--enable-features=WebMCPTesting` et remonte les outils
    WebMCP exposés par la cible dans `probe.webmcp`. Cette détection ne change pas le
-   verdict : l'exécution des outils est du ressort de `webmcp-qa.yml`.
+   verdict : l'exécution des outils est du ressort de `antigravity-qa.yml`.
 
 Seuils des quatre cas principaux : `maxContentMs: 5000`, `maxWaitMs: 15000`.
 
 ## Cas WebMCP
 
-Les cas qui déclarent `webmcp.tool` sont exécutés par un workflow séparé, sans
-fastbrowse ni clé OpenCode. Voir `docs/qa-webmcp.md`.
+Les cas qui déclarent `webmcp.tool` sont exécutés par le workflow Antigravity, sans
+fastbrowse. Voir `docs/qa-webmcp.md`.

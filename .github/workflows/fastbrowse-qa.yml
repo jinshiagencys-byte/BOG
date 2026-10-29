@@ -94,17 +94,6 @@ jobs:
           test -x .venv/bin/fastbrowse
           echo "✓ $(.venv/bin/fastbrowse --version)"
 
-      - name: Installer la sonde Playwright
-        shell: bash
-        env:
-          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/qa-node"
-          npm install --prefix "$RUNNER_TEMP/qa-node" --no-audit --no-fund playwright-core@1.64.1
-          NODE_PATH="$RUNNER_TEMP/qa-node/node_modules" \
-            node -e "console.log('✓ playwright-core', require('playwright-core/package.json').version)"
-
       - name: Récupérer le manifeste du run
         env:
           MANIFEST_URL: ${{ inputs.manifest_url }}
@@ -153,7 +142,6 @@ jobs:
         env:
           FASTBROWSE_CLI: ${{ github.workspace }}/_fastbrowse/.venv/bin/fastbrowse
           FASTBROWSE_DIR: ${{ github.workspace }}/_fastbrowse
-          NODE_PATH: ${{ runner.temp }}/qa-node/node_modules
           RUN_MANIFEST: ${{ github.workspace }}/run_manifest.json
           QA_OUTPUT: ${{ github.workspace }}/qa_result.json
           QA_CACHE_DIR: ${{ github.workspace }}/.qa-cache
