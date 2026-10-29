@@ -6,23 +6,33 @@
  * l'auto-test du serveur MCP) : on ouvre ici une vraie URL publique, on la fait
  * défiler et on vérifie des faits déterministes :
  *   • HTTP du document, titre, langue, erreurs console ;
+ *   • **ressources JS effectivement chargées** — une page servie en 429/5xx sur
+ *     ses scripts est une coquille rendue côté serveur, pas un site qui marche :
+ *     on refuse de la valider ;
+ *   • **application hydratée** (facultatif mais actif par défaut) ;
  *   • chaque texte / sélecteur attendu est **réellement visible** à l'écran
- *     (un élément présent dans le DOM mais jamais affiché ne compte pas).
+ *     (un élément présent dans le DOM mais jamais affiché ne compte pas) ;
+ *   • éventuellement, une **interaction** (saisie / clic) produit un changement.
  *
  * La capture d'écran et le rapport JSON sont écrits dans `QA_OUTPUT_DIR`.
  * Une absence d'outil WebMCP n'est PAS un échec : c'est l'état normal d'un site
  * qui n'instrumente pas WebMCP ; on le remonte à titre informatif.
  *
  * Variables :
- *   REAL_SITE_URL                 URL à tester (défaut https://markhorusbj.com)
- *   REAL_SITE_TITLE               motif regex attendu dans le titre (insensible à la casse)
- *   REAL_SITE_LANG                valeur attendue de <html lang>
- *   REAL_SITE_VISIBLE             JSON : motifs texte devant être visibles
- *   REAL_SITE_SELECTORS           JSON : [{ label, selector, text? }] devant être visibles
- *   REAL_SITE_MAX_CONSOLE_ERRORS  défaut 0
- *   REAL_SITE_CONTENT_TIMEOUT_MS  défaut 30000
- *   REAL_SITE_MIN_TEXT            longueur minimale du texte visible (défaut 50)
- *   QA_OUTPUT_DIR                 défaut .qa-out
+ *   REAL_SITE_URL                    défaut https://markhorusbj.com
+ *   REAL_SITE_TITLE                  motif regex attendu dans le titre
+ *   REAL_SITE_LANG                   valeur attendue de <html lang>
+ *   REAL_SITE_VISIBLE                JSON : motifs texte devant être visibles
+ *   REAL_SITE_SELECTORS              JSON : [{ label, selector, text? }] visibles
+ *   REAL_SITE_INTERACTIONS           JSON : [{ label, selector, value?, watch?, expect?, waitMs? }]
+ *   REAL_SITE_MAX_CONSOLE_ERRORS     défaut 0
+ *   REAL_SITE_CONTENT_TIMEOUT_MS     défaut 30000
+ *   REAL_SITE_MIN_TEXT               défaut 50
+ *   REAL_SITE_FAIL_ON_JS_ERRORS      défaut true  (JS/script en 4xx/5xx = échec)
+ *   REAL_SITE_REQUIRE_HYDRATION      défaut true  (application non montée = échec)
+ *   REAL_SITE_APP_SELECTOR           défaut "#__nuxt, #app, [data-v-app]"
+ *   REAL_SITE_HYDRATION_TIMEOUT_MS   défaut 25000
+ *   QA_OUTPUT_DIR                    défaut qa-out
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs'
@@ -30,11 +40,17 @@ import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { launchBrowser } from './cdp-client.mjs'
 
+const bool = (value, fallback) => (value === undefined ? fallback : ['1', 'true', 'yes', 'on'].includes(String(value).toLowerCase()))
+
 const URL_TARGET = process.env.REAL_SITE_URL?.trim() || 'https://markhorusbj.com'
-const OUT_DIR = process.env.QA_OUTPUT_DIR?.trim() || '.qa-out'
+const OUT_DIR = process.env.QA_OUTPUT_DIR?.trim() || 'qa-out'
 const MAX_CONSOLE_ERRORS = Number(process.env.REAL_SITE_MAX_CONSOLE_ERRORS ?? 0)
 const CONTENT_TIMEOUT_MS = Number(process.env.REAL_SITE_CONTENT_TIMEOUT_MS ?? 30000)
 const MIN_TEXT = Number(process.env.REAL_SITE_MIN_TEXT ?? 50)
+const FAIL_ON_JS_ERRORS = bool(process.env.REAL_SITE_FAIL_ON_JS_ERRORS, true)
+const REQUIRE_HYDRATION = bool(process.env.REAL_SITE_REQUIRE_HYDRATION, true)
+const APP_SELECTOR = process.env.REAL_SITE_APP_SELECTOR?.trim() || '#__nuxt, #app, [data-v-app]'
+const HYDRATION_TIMEOUT_MS = Number(process.env.REAL_SITE_HYDRATION_TIMEOUT_MS ?? 25000)
 
 function parseJsonEnv(name, fallback) {
   const raw = process.env[name]
@@ -52,6 +68,7 @@ const EXPECT_TITLE = process.env.REAL_SITE_TITLE?.trim() || null
 const EXPECT_LANG = process.env.REAL_SITE_LANG?.trim() || null
 const VISIBLE_PATTERNS = parseJsonEnv('REAL_SITE_VISIBLE', [])
 const VISIBLE_SELECTORS = parseJsonEnv('REAL_SITE_SELECTORS', [])
+const INTERACTIONS = parseJsonEnv('REAL_SITE_INTERACTIONS', [])
 
 const nodeMajor = Number(process.versions.node.split('.')[0])
 if (nodeMajor < 22) {
@@ -65,7 +82,8 @@ const record = (name, ok, detail = '') => {
   console.log(`  ${ok ? '✓' : '✗'} ${name}${detail ? ` — ${detail}` : ''}`)
 }
 
-// Fonctions exécutées dans la page (sérialisées : aucune variable extérieure).
+// --- fonctions exécutées dans la page (sérialisées : aucune variable extérieure)
+
 function visiblePatterns(patterns) {
   const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'TEMPLATE', 'NOSCRIPT', 'HEAD', 'META', 'LINK', 'TITLE'])
   const describe = (element) => {
@@ -112,12 +130,7 @@ function visiblePatterns(patterns) {
         // Défilement impossible : on garde la mesure précédente.
       }
       rect = element.getBoundingClientRect()
-      if (
-        rect.bottom >= 0 &&
-        rect.top <= window.innerHeight &&
-        rect.right >= 0 &&
-        rect.left <= window.innerWidth
-      ) {
+      if (rect.bottom >= 0 && rect.top <= window.innerHeight && rect.right >= 0 && rect.left <= window.innerWidth) {
         visible = true
         inViewport = true
         break
@@ -151,6 +164,46 @@ function visibleSelectors(items) {
   })
 }
 
+/** L'application a-t-elle réellement monté (Vue `__vue_app__`, `data-v-app`, DOM réactif) ? */
+function appMounted(selector) {
+  const roots = Array.from(document.querySelectorAll(selector))
+  return roots.some((root) => root.__vue_app__ || root.hasAttribute('data-v-app') || root.__reactRoot || root.__svelte_meta)
+}
+
+/** Saisit / clique, puis vérifie qu'un changement visible se produit. */
+function interactionProbe(items) {
+  const snapshot = () => (document.body ? document.body.innerText.replace(/\s+/g, ' ').trim() : '')
+  return (async () => {
+    const out = []
+    for (const item of items) {
+      const element = document.querySelector(item.selector)
+      if (!element) {
+        out.push({ label: item.label, ok: false, reason: 'introuvable' })
+        continue
+      }
+      const read = () => (item.watch ? document.querySelector(item.watch)?.innerText || '' : snapshot())
+      const before = read()
+      element.scrollIntoView({ block: 'center' })
+      if (item.value !== undefined) {
+        element.focus()
+        element.value = item.value
+        element.dispatchEvent(new Event('input', { bubbles: true }))
+        element.dispatchEvent(new Event('change', { bubbles: true }))
+      } else {
+        element.click()
+      }
+      await new Promise((resolve) => setTimeout(resolve, Number(item.waitMs ?? 1500)))
+      const after = read()
+      const changed = before !== after
+      const matched = item.expect ? new RegExp(item.expect, 'i').test(after) : true
+      out.push({ label: item.label, ok: changed && matched, changed, matched, sample: after.slice(0, 120) })
+    }
+    return out
+  })()
+}
+
+// --- exécution
+
 console.log(`Cible : ${URL_TARGET}`)
 
 const browser = await launchBrowser({ headless: true })
@@ -159,13 +212,18 @@ await page.connection
   .send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false }, page.sessionId)
   .catch(() => {})
 
+const started = Date.now()
 let httpStatus = null
+const resources = []
 page.connection.on('Network.responseReceived', (params, sid) => {
-  if (sid !== page.sessionId || params.type !== 'Document') return
-  if (Number.isInteger(params.response?.status)) httpStatus = params.response.status
+  if (sid !== page.sessionId) return
+  const status = params.response?.status ?? 0
+  const type = String(params.type ?? '')
+  const url = String(params.response?.url ?? '')
+  resources.push({ type, status, url })
+  if (type === 'Document') httpStatus = status
 })
 
-const started = Date.now()
 let navError = null
 try {
   await page.goto(URL_TARGET, { timeoutMs: 60000 })
@@ -173,12 +231,21 @@ try {
   navError = error.message
 }
 
-// Attendre que le contenu visible se stabilise (sites fortement JS).
+// Attente du contenu visible (sites fortement JS).
 let bodyText = ''
-const deadline = Date.now() + CONTENT_TIMEOUT_MS
-while (Date.now() < deadline) {
+const contentDeadline = Date.now() + CONTENT_TIMEOUT_MS
+while (Date.now() < contentDeadline) {
   bodyText = await page.bodyText().catch(() => '')
   if (bodyText.trim().length >= MIN_TEXT) break
+  await delay(500)
+}
+
+// Attente de l'hydratation (l'application doit finir de monter).
+let mounted = false
+const hydrationDeadline = Date.now() + HYDRATION_TIMEOUT_MS
+while (Date.now() < hydrationDeadline) {
+  mounted = await page.callFunction(appMounted, APP_SELECTOR).catch(() => false)
+  if (mounted) break
   await delay(500)
 }
 
@@ -186,20 +253,29 @@ const finalUrl = await page.url().catch(() => URL_TARGET)
 const title = await page.title().catch(() => '')
 const lang = await page.evaluate('document.documentElement.lang || ""').catch(() => '')
 
+const scriptResources = resources.filter((r) => r.type === 'Script' || /\.m?js(\?|$)/.test(r.url))
+const scriptFailures = scriptResources.filter((r) => r.status >= 400)
+const byStatus = {}
+for (const r of resources) byStatus[r.status] = (byStatus[r.status] ?? 0) + 1
+
 record('navigation', !navError, navError ?? finalUrl)
 record('http_document', httpStatus === 200, `HTTP ${httpStatus}`)
-record(
-  'titre',
-  EXPECT_TITLE ? new RegExp(EXPECT_TITLE, 'i').test(title) : title.trim().length > 0,
-  `"${title}"`,
-)
+record('titre', EXPECT_TITLE ? new RegExp(EXPECT_TITLE, 'i').test(title) : title.trim().length > 0, `"${title}"`)
 if (EXPECT_LANG) record('langue', lang === EXPECT_LANG, `lang="${lang}"`)
 record('texte_visible', bodyText.trim().length >= MIN_TEXT, `${bodyText.trim().length} caractère(s)`)
+record('erreurs_console', page.consoleErrors.length <= MAX_CONSOLE_ERRORS, `${page.consoleErrors.length} erreur(s)`)
 record(
-  'erreurs_console',
-  page.consoleErrors.length <= MAX_CONSOLE_ERRORS,
-  `${page.consoleErrors.length} erreur(s)`,
+  'ressources_js',
+  FAIL_ON_JS_ERRORS ? scriptFailures.length === 0 : true,
+  `${scriptResources.length - scriptFailures.length}/${scriptResources.length} JS chargés` +
+    (scriptFailures.length ? ` — ${scriptFailures.length} en échec (ex. HTTP ${scriptFailures[0].status})` : ''),
 )
+record(
+  'application_montee',
+  REQUIRE_HYDRATION ? mounted === true : true,
+  mounted ? 'hydratée' : `non détectée (${APP_SELECTOR})`,
+)
+console.log(`  ℹ requêtes : ${resources.length} — statuts ${JSON.stringify(byStatus)}`)
 
 if (VISIBLE_PATTERNS.length) {
   const results = await page.callFunction(visiblePatterns, VISIBLE_PATTERNS).catch(() => [])
@@ -219,6 +295,17 @@ if (VISIBLE_SELECTORS.length) {
       `selecteur:${item.label}`,
       item.visible === true && item.textOk !== false,
       `found=${item.found} visible=${item.visible} inViewport=${item.inViewport} text="${item.text}"`,
+    )
+  }
+}
+
+if (INTERACTIONS.length) {
+  const results = await page.callFunction(interactionProbe, INTERACTIONS).catch(() => [])
+  for (const item of results) {
+    record(
+      `interaction:${item.label}`,
+      item.ok === true,
+      item.reason ? item.reason : `changed=${item.changed} matched=${item.matched} → "${item.sample}"`,
     )
   }
 }
@@ -243,11 +330,7 @@ console.log(
 
 let screenshot = null
 try {
-  const capture = await page.connection.send(
-    'Page.captureScreenshot',
-    { format: 'png', captureBeyondViewport: true },
-    page.sessionId,
-  )
+  const capture = await page.connection.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true }, page.sessionId)
   mkdirSync(OUT_DIR, { recursive: true })
   screenshot = join(OUT_DIR, 'screenshot.png')
   writeFileSync(screenshot, Buffer.from(capture.data, 'base64'))
@@ -264,7 +347,9 @@ const report = {
   httpStatus,
   title,
   lang,
+  mounted,
   durationMs: Date.now() - started,
+  resources: { total: resources.length, byStatus, scripts: scriptResources.length, scriptFailures: scriptFailures.length },
   consoleErrors: [...new Set(page.consoleErrors)].slice(0, 12),
   httpErrors: page.httpErrors.slice(0, 12),
   webmcp,

@@ -81,6 +81,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: real-site-evidence
-          path: .qa-out
-          if-no-files-found: ignore
+          path: qa-out
+          if-no-files-found: warn
+          include-hidden-files: true
           retention-days: 14
