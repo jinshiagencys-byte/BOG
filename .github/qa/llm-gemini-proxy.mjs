@@ -3,18 +3,21 @@
  * Passerelle locale Gemini -> OpenAI Chat Completions.
  *
  * Antigravity CLI ne sait parler qu'à un endpoint Gemini-compatible
- * (`modelProvider: "gemini"`). OpenCode Zen expose les modèles demandés
- * (DeepSeek V4.1 Flash Free, Big Pickle, Beam Free) sur son endpoint
- * OpenAI-compatible. Ce proxy traduit donc, dans les deux sens :
+ * (`modelProvider: "gemini"`). Ce proxy traduit donc, dans les deux sens :
  *   - requête Gemini (contents/tools/systemInstruction) -> chat completions ;
  *   - flux SSE OpenAI (texte + tool_calls) -> flux SSE Gemini.
  *
- * Les modèles gratuits OpenCode sont servis par la passerelle `inference`
- * derrière une validation d'identité client. Le proxy reproduit donc le
- * contrat du client officiel (User-Agent, en-têtes x-opencode-*, identifiants
- * ses_/msg_ et tools non vide), et utilise le credential public `Bearer public`
- * comme le client OpenCode non connecté. La clé API reste disponible pour les
- * modèles payants.
+ * Il est neutre côté fournisseur : n'importe quel endpoint OpenAI-compatible
+ * (OpenCode Zen, TokenHarbor, OpenRouter…) se configure par `LLM_BASE_URL` +
+ * `LLM_API_KEY` + `LLM_MODEL`. Pour rétrocompatibilité, `OPENCODE_BASE_URL`,
+ * `OPENCODE_API_KEY` et `OPENCODE_MODEL` restent lus en repli.
+ *
+ * Deux comportements ne concernent que la passerelle OpenCode et ne sont donc
+ * appliqués que si l'URL amont est `opencode.ai` :
+ *   - l'identité du client officiel (User-Agent, en-têtes x-opencode-*,
+ *     identifiants ses_/msg_ et le credential public `Bearer public`) ;
+ *   - l'injection des tools de compatibilité `bash`/`read` exigés par le free
+ *     tier.
  *
  * L'agent Antigravity ne reçoit qu'une clé factice et ne peut pas exécuter de
  * shell.
@@ -24,11 +27,17 @@ import http from 'node:http'
 import crypto from 'node:crypto'
 
 const PORT = Number(process.env.PORT || 8787)
-const UPSTREAM_URL = process.env.UPSTREAM_URL || 'https://opencode.ai/inference/v1/chat/completions'
-const API_KEY = process.env.OPENCODE_API_KEY || ''
-const MAIN_MODEL = process.env.OPENCODE_MODEL || 'big-pickle'
-const TITLE_MODEL = process.env.OPENCODE_TITLE_MODEL || 'big-pickle'
-const SAFETY_MODEL = process.env.OPENCODE_SAFETY_MODEL || 'big-pickle'
+
+// Fournisseur : TokenHarbor, OpenCode Zen ou tout endpoint OpenAI-compatible.
+const OPENCODE_BASE_URL = 'https://opencode.ai/inference/v1'
+const LLM_BASE_URL = (process.env.LLM_BASE_URL || process.env.OPENCODE_BASE_URL || OPENCODE_BASE_URL)
+  .replace(/\/+$/, '')
+const UPSTREAM_URL = process.env.UPSTREAM_URL || `${LLM_BASE_URL}/chat/completions`
+const IS_OPENCODE = /(^|\.)opencode\.ai\//.test(`${new URL(UPSTREAM_URL).host}/`)
+const API_KEY = process.env.LLM_API_KEY || process.env.OPENCODE_API_KEY || ''
+const MAIN_MODEL = process.env.LLM_MODEL || process.env.OPENCODE_MODEL || 'big-pickle'
+const TITLE_MODEL = process.env.LLM_TITLE_MODEL || process.env.OPENCODE_TITLE_MODEL || MAIN_MODEL
+const SAFETY_MODEL = process.env.LLM_SAFETY_MODEL || process.env.OPENCODE_SAFETY_MODEL || MAIN_MODEL
 const OPENCODE_USER_AGENT = process.env.OPENCODE_USER_AGENT || 'opencode/1.19.4'
 const OPENCODE_CLIENT = process.env.OPENCODE_CLIENT || 'cli'
 
@@ -100,25 +109,29 @@ const COMPAT_TOOLS = [
 ]
 
 function authorizationFor(model) {
-  // Si une clé OpenCode est fournie (compte authentifié), elle est utilisée
-  // pour tous les modèles, y compris les modèles gratuits : cela rattache le
-  // quota au compte au lieu du credential public anonyme.
+  // Compte authentifié : la clé est utilisée pour tous les modèles. Sur la
+  // passerelle OpenCode, l'absence de clé retombe sur le credential public
+  // anonyme ; ailleurs, une clé est requise.
   if (API_KEY) return `Bearer ${API_KEY}`
-  return 'Bearer public'
+  return IS_OPENCODE ? 'Bearer public' : 'Bearer'
 }
 
 function upstreamHeaders(model) {
-  return {
+  const headers = {
     Authorization: authorizationFor(model),
     'Content-Type': 'application/json',
     Accept: 'text/event-stream',
-    'User-Agent': OPENCODE_USER_AGENT,
-    'x-opencode-client': OPENCODE_CLIENT,
-    'x-opencode-project': 'global',
-    'x-opencode-session': SESSION_ID,
-    'x-opencode-session-id': SESSION_ID,
-    'x-opencode-request': openCodeID('msg', 'ascending'),
   }
+  // Signature du client OpenCode : utile uniquement sur sa passerelle.
+  if (IS_OPENCODE) {
+    headers['User-Agent'] = OPENCODE_USER_AGENT
+    headers['x-opencode-client'] = OPENCODE_CLIENT
+    headers['x-opencode-project'] = 'global'
+    headers['x-opencode-session'] = SESSION_ID
+    headers['x-opencode-session-id'] = SESSION_ID
+    headers['x-opencode-request'] = openCodeID('msg', 'ascending')
+  }
+  return headers
 }
 
 function modelFor(geminiModel) {
@@ -238,10 +251,14 @@ function toOpenAI(body, model) {
 
   const providedTools = new Set(tools.map((tool) => tool.function.name))
   const injectedTools = new Set()
-  for (const tool of COMPAT_TOOLS) {
-    if (providedTools.has(tool.function.name)) continue
-    tools.push(tool)
-    injectedTools.add(tool.function.name)
+  // Le free tier OpenCode exige au moins deux tools non vides ; les autres
+  // fournisseurs n'ont pas ce contrat et ne doivent pas voir ces faux outils.
+  if (IS_OPENCODE) {
+    for (const tool of COMPAT_TOOLS) {
+      if (providedTools.has(tool.function.name)) continue
+      tools.push(tool)
+      injectedTools.add(tool.function.name)
+    }
   }
 
   const generation = body?.generationConfig || {}
@@ -251,8 +268,10 @@ function toOpenAI(body, model) {
     // La passerelle free tier refuse les requêtes non streamées.
     stream: true,
     stream_options: { include_usage: true },
-    tools,
-    tool_choice: 'auto',
+  }
+  if (tools.length > 0) {
+    request.tools = tools
+    request.tool_choice = 'auto'
   }
   if (typeof generation.temperature === 'number') request.temperature = generation.temperature
   if (typeof generation.topP === 'number') request.top_p = generation.topP
@@ -617,8 +636,7 @@ async function preflightModel(model) {
     max_tokens: 8,
     stream: true,
     stream_options: { include_usage: true },
-    tools: COMPAT_TOOLS,
-    tool_choice: 'auto',
+    ...(IS_OPENCODE ? { tools: COMPAT_TOOLS, tool_choice: 'auto' } : {}),
   }
   try {
     const upstream = await fetch(UPSTREAM_URL, {
@@ -716,8 +734,8 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, '127.0.0.1', () => {
   log(`listening on 127.0.0.1:${PORT}`)
-  log(`main=${MAIN_MODEL} title=${TITLE_MODEL} safety=${SAFETY_MODEL} auth=${API_KEY ? 'account' : 'public'}`)
-  log(`upstream=${UPSTREAM_URL}`)
+  log(`main=${MAIN_MODEL} title=${TITLE_MODEL} safety=${SAFETY_MODEL} auth=${API_KEY ? 'key' : (IS_OPENCODE ? 'public' : 'none')}`)
+  log(`upstream=${UPSTREAM_URL}${IS_OPENCODE ? ' (openCode: identité + tools de compatibilité)' : ' (générique)'}`)
 })
 
 for (const signal of ['SIGINT', 'SIGTERM']) {

@@ -1,13 +1,17 @@
-name: Antigravity QA — TestDino-like run
+name: Antigravity QA — WebMCP
 
 # Exécution d'un run sélectionné depuis l'application.
-# L'agent est Antigravity CLI (`agy`). Son sous-agent navigateur natif `browser`
-# utilise son MCP chrome-devtools interne en `--autoConnect` vers un Chrome lancé
-# avec CDP par ce workflow.
+# L'agent est Antigravity CLI (`agy`). Il décide du parcours et exécute les cas
+# en appelant les outils WebMCP que la page expose, via le serveur MCP local
+# `.github/qa/webmcp-mcp-server.mjs` branché sur le Chrome du run :
+#   - sous-agent navigateur natif `browser` : Chrome DevTools en `--autoConnect` ;
+#   - serveur MCP `webmcp` : WebMCP, branché via `WEBMCP_CDP_URL` sur le même Chrome.
+# Une page qui n'expose aucun outil WebMCP est traitée par le sous-agent navigateur.
+#
 # Antigravity ne parle qu'à un endpoint Gemini-compatible ; un proxy local traduit
-# Gemini <-> OpenAI Chat Completions pour utiliser les modèles OpenCode Zen
-# (Big Pickle par défaut, DeepSeek V4.1 Flash Free, Beam Free). Playwright n'est
-# plus utilisé.
+# Gemini <-> OpenAI Chat Completions. Le fournisseur est configurable :
+# `TOKENHARBOR_API_KEY` (défaut), `OPENCODE_API_KEY`, ou les variables de dépôt
+# `ANTIGRAVITY_LLM_BASE_URL` / `ANTIGRAVITY_LLM_MODEL`.
 
 on:
   workflow_dispatch:
@@ -29,9 +33,8 @@ on:
         required: true
         type: string
       model:
-        description: "Modèle OpenCode (big-pickle, deepseek-v4.1-flash-free ou beam-free)"
+        description: "Modèle LLM (vide = défaut du fournisseur : deepseek-v4.1-flash:free)"
         required: false
-        default: "big-pickle"
         type: string
       target_url:
         description: "URL cible (facultative, sinon lue dans le manifeste)"
@@ -68,6 +71,7 @@ jobs:
           fi
 
       - name: Lancer Chrome avec CDP pour le sous-agent navigateur
+        id: chrome
         shell: bash
         run: |
           set -euo pipefail
@@ -87,6 +91,7 @@ jobs:
             --disable-dev-shm-usage \
             --remote-debugging-port=0 \
             --remote-allow-origins='*' \
+            --enable-features=WebMCPTesting \
             --user-data-dir="$CHROME_PROFILE" \
             about:blank > chrome.log 2>&1 &
           echo $! > chrome.pid
@@ -109,6 +114,11 @@ jobs:
             exit 1
           fi
           echo "✓ Chrome CDP prêt sur le port $(head -n1 "$CHROME_PROFILE/DevToolsActivePort")"
+          # Le serveur MCP WebMCP se branche sur ce même Chrome : une seule
+          # instance, donc une seule page observée par les deux clients.
+          CDP_PORT=$(head -n1 "$CHROME_PROFILE/DevToolsActivePort")
+          echo "WEBMCP_CDP_URL=http://127.0.0.1:$CDP_PORT" >> "$GITHUB_ENV"
+          echo "webmcp_cdp_url=http://127.0.0.1:$CDP_PORT" >> "$GITHUB_OUTPUT"
 
       - name: Installer Antigravity CLI
         shell: bash
@@ -117,6 +127,19 @@ jobs:
           curl -fsSL https://antigravity.google/cli/install.sh | bash
           export PATH="$HOME/.local/bin:$PATH"
           agy --version
+
+      - name: Installer Playwright (client CDP du serveur WebMCP)
+        shell: bash
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+        run: |
+          set -euo pipefail
+          # Le serveur MCP WebMCP n'utilise playwright-core que comme client CDP :
+          # aucun navigateur à télécharger, on réutilise le Chrome du run.
+          mkdir -p "$RUNNER_TEMP/qa-node"
+          npm install --prefix "$RUNNER_TEMP/qa-node" --no-audit --no-fund playwright-core@1.64.1
+          NODE_PATH="$RUNNER_TEMP/qa-node/node_modules" \
+            node -e "console.log('✓ playwright-core', require('playwright-core/package.json').version)"
 
       - name: Configurer Antigravity (Gemini-compatible, navigateur natif)
         shell: bash
@@ -129,6 +152,9 @@ jobs:
             "toolPermission": "always-proceed",
             "enableTerminalSandbox": true,
             "permissions": {
+              "allow": [
+                "mcp(webmcp/*)"
+              ],
               "deny": [
                 "command()",
                 "unsandboxed()",
@@ -145,6 +171,49 @@ jobs:
           }
           EOF
           cat "$HOME/.gemini/antigravity-cli/settings.json"
+
+      - name: Déclarer le serveur MCP WebMCP
+        env:
+          STORAGE_STATE: ${{ secrets.WEBMCP_STORAGE_STATE }}
+          PROBE_DIR: ${{ runner.temp }}/qa-node
+          NODE_MODULES: ${{ runner.temp }}/qa-node/node_modules
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${WEBMCP_CDP_URL:?WEBMCP_CDP_URL attendu (étape Chrome)}"
+          STORAGE=""
+          if [ -n "${STORAGE_STATE:-}" ]; then
+            printf '%s' "$STORAGE_STATE" > "$RUNNER_TEMP/webmcp-storage.json"
+            chmod 600 "$RUNNER_TEMP/webmcp-storage.json"
+            STORAGE="$RUNNER_TEMP/webmcp-storage.json"
+          fi
+          mkdir -p "$GITHUB_WORKSPACE/videos"
+          WEBMCP_STORAGE="$STORAGE" python3 - <<'PY'
+          import json, os
+          workspace = os.environ["GITHUB_WORKSPACE"]
+          env = {
+              "WEBMCP_CDP_URL": os.environ["WEBMCP_CDP_URL"],
+              "WEBMCP_PROBE_DIR": os.environ["PROBE_DIR"],
+              "NODE_PATH": os.environ["NODE_MODULES"],
+              "WEBMCP_VIDEO_DIR": os.path.join(workspace, "videos"),
+              # Par défaut, une confirmation de mutation est refusée : l'agent
+              # doit l'accepter explicitement, comme un utilisateur prudent.
+              "WEBMCP_CONFIRM": "dismiss",
+          }
+          if os.environ.get("WEBMCP_STORAGE"):
+              env["WEBMCP_STORAGE_STATE"] = os.environ["WEBMCP_STORAGE"]
+          config = {"mcpServers": {"webmcp": {
+              "command": "node",
+              "args": [os.path.join(workspace, ".github/qa/webmcp-mcp-server.mjs")],
+              "env": env,
+              "timeoutSeconds": 300,
+          }}}
+          path = os.path.expanduser("~/.gemini/config/mcp_config.json")
+          os.makedirs(os.path.dirname(path), exist_ok=True)
+          with open(path, "w", encoding="utf-8") as handle:
+              json.dump(config, handle, indent=2, ensure_ascii=False)
+          print(open(path, encoding="utf-8").read())
+          PY
 
       - name: Récupérer le manifeste du run
         env:
@@ -202,39 +271,71 @@ jobs:
         run: |
           mkdir -p trajectories videos screenshots
 
-      - name: Normaliser le modèle OpenCode
+      - name: Choisir le fournisseur LLM
         id: model
         env:
           REQUESTED_MODEL: ${{ inputs.model }}
+          TOKENHARBOR_KEY: ${{ secrets.TOKENHARBOR_API_KEY }}
+          OPENCODE_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          BASE_URL_VAR: ${{ vars.ANTIGRAVITY_LLM_BASE_URL }}
+          MODEL_VAR: ${{ vars.ANTIGRAVITY_LLM_MODEL }}
         shell: bash
         run: |
           set -euo pipefail
-          MODEL=$(printf '%s' "${REQUESTED_MODEL:-}" | tr '[:upper:]' '[:lower:]' | xargs)
+          # Priorité : variables de dépôt, sinon TokenHarbor, sinon OpenCode Zen.
+          if [ -n "${BASE_URL_VAR:-}" ]; then
+            BASE_URL="$BASE_URL_VAR"
+          elif [ -n "${TOKENHARBOR_KEY:-}" ]; then
+            BASE_URL="https://tokenharbor.ai/v1"
+          elif [ -n "${OPENCODE_KEY:-}" ]; then
+            BASE_URL="https://opencode.ai/inference/v1"
+          else
+            echo "::error::Aucune clé LLM : renseigne le secret TOKENHARBOR_API_KEY ou OPENCODE_API_KEY."
+            exit 1
+          fi
+          MODEL="${REQUESTED_MODEL:-${MODEL_VAR:-}}"
+          # `start-run` transmet toujours un nom de modèle OpenCode
+          # (big-pickle, beam-free, …-free). Ces noms n'existent pas chez
+          # TokenHarbor, qui attend « fournisseur:modèle » ; on retombe alors sur
+          # le défaut plutôt que de faire échouer le preflight.
+          if [ -n "$MODEL" ]; then
+            case "$BASE_URL" in
+              *tokenharbor*)
+                case "$MODEL" in
+                  *:*) : ;;
+                  *)
+                    echo "::warning::Modèle '$MODEL' incompatible avec TokenHarbor, repli sur le défaut"
+                    MODEL="" ;;
+                esac ;;
+            esac
+          fi
+          if [ -z "$MODEL" ]; then
+            case "$BASE_URL" in
+              *tokenharbor*) MODEL="deepseek-v4.1-flash:free" ;;
+              *) MODEL="deepseek-v4.1-flash-free" ;;
+            esac
+          fi
           case "$MODEL" in
-            deepseek|deepseek-v4.1-flash-free|opencode/deepseek|opencode/deepseek-v4.1-flash-free)
-              MODEL="deepseek-v4.1-flash-free" ;;
-            big-pickle|big\ pickle|pickle|opencode/big-pickle|opencode/big\ pickle)
-              MODEL="big-pickle" ;;
-            beam|beam-free|opencode/beam|opencode/beam-free)
-              MODEL="beam-free" ;;
-            *)
-              echo "::warning::Modèle '$REQUESTED_MODEL' inconnu, repli sur big-pickle"
-              MODEL="big-pickle" ;;
+            big-pickle|big\ pickle|pickle) MODEL="big-pickle" ;;
+            beam|beam-free) MODEL="beam-free" ;;
           esac
+          echo "base_url=$BASE_URL" >> "$GITHUB_OUTPUT"
           echo "name=$MODEL" >> "$GITHUB_OUTPUT"
-          echo "🧠 Modèle OpenCode : $MODEL"
+          echo "🧠 Fournisseur LLM : $BASE_URL"
+          echo "🧠 Modèle : $MODEL"
 
-      - name: Démarrer le proxy Gemini -> OpenCode
+      - name: Démarrer le proxy Gemini -> LLM
         env:
-          OPENCODE_MODEL: ${{ steps.model.outputs.name }}
-          OPENCODE_TITLE_MODEL: big-pickle
-          OPENCODE_SAFETY_MODEL: big-pickle
-          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          LLM_BASE_URL: ${{ steps.model.outputs.base_url }}
+          LLM_MODEL: ${{ steps.model.outputs.name }}
+          LLM_TITLE_MODEL: ${{ steps.model.outputs.name }}
+          LLM_SAFETY_MODEL: ${{ steps.model.outputs.name }}
+          LLM_API_KEY: ${{ secrets.TOKENHARBOR_API_KEY || secrets.OPENCODE_API_KEY }}
         shell: bash
         run: |
           set -euo pipefail
           rm -f proxy.log proxy.pid
-          nohup node .github/qa/opencode-gemini-proxy.mjs > proxy.log 2>&1 &
+          nohup node .github/qa/llm-gemini-proxy.mjs > proxy.log 2>&1 &
           echo $! > proxy.pid
           READY=0
           for _ in $(seq 1 30); do
@@ -247,29 +348,28 @@ jobs:
           done
           if [ "$READY" -ne 1 ]; then
             cat proxy.log || true
-            echo "::error::Le proxy OpenCode n'a pas démarré"
+            echo "::error::Le proxy LLM n'a pas démarré"
             exit 1
           fi
 
-          # Le free tier OpenCode exige un flux SSE, des tools non vides et
-          # l'identité du client officiel. Le proxy applique ce contrat ; on
-          # vérifie ici qu'un premier chunk arrive avant de lancer l'agent.
+          # Le client Gemini d'Antigravity attend un flux SSE. On vérifie qu'un
+          # premier chunk arrive du fournisseur avant de lancer l'agent.
           HTTP=$(curl -sS --max-time 75 -o /tmp/model_preflight.json -w '%{http_code}' \
             http://127.0.0.1:8787/preflight || true)
           cat /tmp/model_preflight.json 2>/dev/null || true; echo
           if [ "${HTTP:-}" != "200" ] || ! jq -e '.ok == true' /tmp/model_preflight.json >/dev/null 2>&1; then
-            echo "::error::Preflight OpenCode HTTP ${HTTP:-aucun} pour $OPENCODE_MODEL"
+            echo "::error::Preflight LLM HTTP ${HTTP:-aucun} pour $LLM_MODEL sur $LLM_BASE_URL"
             tail -50 proxy.log || true
             exit 1
           fi
-          echo "✓ Modèle OpenCode disponible : $OPENCODE_MODEL"
+          echo "✓ Modèle disponible : $LLM_MODEL"
 
-      - name: Exécuter l'agent QA (Antigravity natif + OpenCode)
+      - name: Exécuter l'agent QA (Antigravity + WebMCP)
         id: qa_agent
         env:
           TARGET_URL: ${{ steps.prompt.outputs.target_url }}
           AI_MODEL: ${{ steps.model.outputs.name }}
-          # Antigravity ne reçoit jamais de credential OpenCode : le proxy local
+          # Antigravity ne reçoit jamais de credential LLM : le proxy local
           # gère l'authentification. Cette clé factice satisfait son SDK Gemini.
           GEMINI_API_KEY: local-proxy-key
           GOOGLE_GEMINI_BASE_URL: http://127.0.0.1:8787
@@ -284,13 +384,13 @@ jobs:
           echo "model=$AI_MODEL" >> "$GITHUB_OUTPUT"
 
           ANTIGRAVITY_MODEL="gemini-3.8-flash-medium"
-          echo "🧠 Modèle OpenCode : $AI_MODEL (proxy Gemini local)"
+          echo "🧠 Modèle LLM : $AI_MODEL (proxy Gemini local)"
           echo "🧩 Slug Antigravity : $ANTIGRAVITY_MODEL"
 
           QA_PROMPT=$(cat qa_prompt.txt)
           printf '%s' "$QA_PROMPT" > trajectories/qa_prompt.txt
           echo "🎯 Cible : $TARGET_URL"
-          echo "🌐 Sous-agent : browser (Chrome DevTools natif Antigravity)"
+          echo "🌐 Exécution : outils WebMCP (serveur MCP webmcp) + sous-agent navigateur"
 
           # Pas de --dangerously-skip-permissions : il contourne aussi les règles
           # deny et autoriserait run_command. `toolPermission: always-proceed`
@@ -308,7 +408,7 @@ jobs:
             echo "::warning::agy s'est terminé avec le code $EXIT_CODE"
           fi
 
-      - name: Arrêter le proxy OpenCode
+      - name: Arrêter le proxy LLM
         if: always()
         shell: bash
         run: |

@@ -119,29 +119,36 @@ plus déclenché.
 
 ## Exécution des runs — agent Antigravity (fallback)
 
-Le moteur d'exécution n'est **pas Playwright**. Les tests sont exécutés par
-**Antigravity CLI** (`agy`) et son sous-agent navigateur natif `browser`, qui pilote Chrome
-via Chrome DevTools (CDP). Le workflow lance Chrome en mode headless avec
-`--remote-debugging-port=0` et le profil `$HOME/.config/google-chrome` ; le sous-agent
-s'y connecte via `--autoConnect`. Aucun MCP n'est configuré à la main et Playwright n'est
-plus utilisé par le workflow. L'agent principal coordonne les lots de cas, agrège les
-observations du sous-agent et écrit `qa_result.json`.
+Les tests sont exécutés par **Antigravity CLI** (`agy`), qui décide du parcours. Deux
+chemins d'exécution coexistent :
+
+- les **outils WebMCP** exposés par la page, appelés via le serveur MCP local
+  `.github/qa/webmcp-mcp-server.mjs` (chemin prioritaire pour les pages instrumentées) ;
+- le sous-agent navigateur natif `browser` (Chrome DevTools/CDP), en repli pour les pages
+  qui n'exposent aucun outil WebMCP.
+
+Le workflow lance Chrome en mode headless avec `--remote-debugging-port=0`,
+`--enable-features=WebMCPTesting` et un profil dédié ; le sous-agent s'y connecte via
+`--autoConnect` et le serveur MCP WebMCP s'y branche via `WEBMCP_CDP_URL`. `playwright-core`
+n'est utilisé que comme client CDP par ce serveur MCP, jamais comme exécuteur de scénario.
+L'agent principal coordonne les cas, agrège les observations et écrit `qa_result.json`.
 
 Antigravity ne sait parler qu'à un endpoint **Gemini-compatible**. Le workflow démarre
-donc un proxy local, `.github/qa/opencode-gemini-proxy.mjs`, qui traduit les requêtes
-Gemini (`streamGenerateContent`, outils, `functionResponse`) vers l'endpoint OpenAI Chat
-Completions d'OpenCode Zen, puis retraduit le flux SSE (texte et `tool_calls`) en Gemini.
-Antigravity ne reçoit qu'une clé factice et `GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:8787`.
-Le proxy applique le contrat d'identité du client OpenCode officiel (User-Agent,
-en-têtes `x-opencode-*`, identifiants `ses_`/`msg_`, flux SSE et tools non vides). Sans
-clé, il utilise le credential public `Bearer public` pour les modèles gratuits. Si
-`OPENCODE_API_KEY` est fournie (secret GitHub Actions), elle est utilisée pour tous les
-modèles, y compris gratuits, afin de rattacher le quota au compte authentifié.
+donc un proxy local, `.github/qa/llm-gemini-proxy.mjs`, qui traduit les requêtes Gemini
+(`streamGenerateContent`, outils, `functionResponse`) vers un endpoint OpenAI Chat
+Completions, puis retraduit le flux SSE (texte et `tool_calls`) en Gemini. Le fournisseur
+est configurable : TokenHarbor par défaut (`secret TOKENHARBOR_API_KEY`,
+`https://tokenharbor.ai/v1`), sinon OpenCode Zen (`secret OPENCODE_API_KEY`), sinon les
+variables de dépôt `ANTIGRAVITY_LLM_BASE_URL` et `ANTIGRAVITY_LLM_MODEL`. Antigravity ne
+reçoit qu'une clé factice et `GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:8787`. Les
+comportements propres à la passerelle OpenCode (identité du client officiel, credential
+public `Bearer public`, tools de compatibilité `bash`/`read`) ne sont appliqués que si
+l'URL amont est `opencode.ai`.
 
-Modèles OpenCode sélectionnables : `big-pickle` (défaut), `deepseek-v4.1-flash-free` et
-`beam-free`. Le slug Gemini `gemini-3.8-flash-medium` n'est qu'un véhicule protocolaire :
-le proxy le remplace par le modèle OpenCode choisi. Les requêtes de titre et de sécurité
-d'Antigravity sont envoyées à `big-pickle`.
+Modèles : par défaut `deepseek-v4.1-flash:free` sur TokenHarbor, `deepseek-v4.1-flash-free`
+sur OpenCode Zen. `big-pickle` et `beam-free` restent acceptés sur OpenCode Zen. Le slug
+Gemini `gemini-3.8-flash-medium` n'est qu'un véhicule protocolaire : le proxy le remplace
+par le modèle choisi.
 
 Le workflow démarre le proxy, vérifie l'accès au modèle via `/preflight`, puis lance
 `agy -p`. Le sous-agent `browser` est déclenché par la commande `/browser` en tête du
