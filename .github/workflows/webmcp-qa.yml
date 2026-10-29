@@ -70,6 +70,8 @@ on:
       - ".github/workflows/webmcp-qa.yml"
       - ".github/qa/webmcp-runner.mjs"
       - ".github/qa/webmcp-executor.mjs"
+      - ".github/qa/case-planner.mjs"
+      - ".github/qa/perch-planner.mjs"
       - ".github/qa/webmcp-demo-cases.json"
       - ".github/qa/webmcp-demo-manifest.json"
       - ".github/qa/fixtures/**"
@@ -129,6 +131,32 @@ jobs:
           set -euo pipefail
           # Nécessaire pour recordVideo. Ne télécharge que ffmpeg.
           node "$RUNNER_TEMP/qa-node/node_modules/playwright-core/cli.js" install ffmpeg
+
+      - name: Installer le CLI Perch (plan LLM)
+        id: perch
+        env:
+          PERCH_CLI_SESSION: ${{ secrets.PERCH_CLI_SESSION }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Sans session, aucun fournisseur Perch : le plan retombe sur le
+          # relais `qa-plan`, puis sur un appel direct.
+          if [ -z "${PERCH_CLI_SESSION:-}" ]; then
+            echo "i Aucune session Perch : plan via le relais"
+            exit 0
+          fi
+          npm install -g perchai-cli --no-audit --no-fund
+          mkdir -p "$RUNNER_TEMP/perch-auth"
+          printf '%s' "$PERCH_CLI_SESSION" > "$RUNNER_TEMP/perch-auth/cli-auth-session.json"
+          chmod 600 "$RUNNER_TEMP/perch-auth/cli-auth-session.json"
+          # Une session périmée ne doit pas casser le run : avertissement et
+          # repli sur le relais.
+          if PERCH_CLI_AUTH_DIR="$RUNNER_TEMP/perch-auth" perch status; then
+            echo "auth_dir=$RUNNER_TEMP/perch-auth" >> "$GITHUB_OUTPUT"
+            echo "✓ Session Perch chargée depuis le secret"
+          else
+            echo "::warning::Session Perch invalide : plan via le relais"
+          fi
 
       - name: Récupérer le manifeste du run
         if: inputs.manifest_url != ''
@@ -197,8 +225,18 @@ jobs:
           PROFILE_SAVE_URL: ${{ inputs.profile_save_url }}
           PLAN_URL: ${{ inputs.plan_url }}
           WEBMCP_PLAN: auto
-          # Premier fournisseur : OpenCode. Repli : OpenRouter (modèle gratuit)
-          # si la clé est configurée. Sans clé, le scénario déterministe suffit.
+          # Premier fournisseur : TokenHarbor, endpoint compatible OpenAI.
+          # Clé côté secret GitHub ; le relais `qa-plan` reste le repli.
+          WEBMCP_PLAN_ENDPOINT: https://tokenharbor.ai/v1
+          WEBMCP_PLAN_KEY: ${{ secrets.TOKENHARBOR_API_KEY }}
+          WEBMCP_PLAN_MODEL: deepseek-v4.1-flash:free
+          WEBMCP_PLAN_LABEL: tokenharbor
+          # Plan Perch : activé seulement si le CLI et la session sont là.
+          PERCH_CLI_AUTH_DIR: ${{ steps.perch.outputs.auth_dir }}
+          PERCH_TIMEOUT_MS: "240000"
+          WEBMCP_PERCH: auto
+          # Repli : OpenCode. Puis OpenRouter (modèle gratuit) si la clé est
+          # configurée. Sans clé, le scénario déterministe suffit.
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           OPENCODE_BASE_URL: https://opencode.ai/inference/openai/v1
           OPENCODE_MODEL: deepseek-v4.1-flash

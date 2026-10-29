@@ -41,7 +41,7 @@ function clean(value, max = 300) {
   return String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, max)
 }
 
-function extractJson(content) {
+export function extractJson(content) {
   const text = String(content ?? '').trim()
   if (!text) return null
   try {
@@ -211,6 +211,83 @@ function mustSeeFacts(profile) {
   return values
 }
 
+/** Payload factuel envoyé au LLM, partagé par tous les transports. */
+export function planPayload({ profile, cases }) {
+  const facts = factsForPlan(profile)
+  return {
+    site: facts.site,
+    facts,
+    cases: (cases ?? []).map((testCase) => ({
+      code: testCase.code,
+      title: testCase.title,
+      description: testCase.description ?? '',
+      steps: (testCase.steps ?? []).map((step) => ({
+        action: step.action,
+        expected: step.expected,
+      })),
+    })),
+  }
+}
+
+/**
+ * Les deux messages exacts à envoyer au modèle. Exporté pour qu'un exécuteur
+ * LLM hors du runner (par exemple le CLI Perch dans le workflow) pose la même
+ * question, au caractère près, que le relais HTTP.
+ */
+export function buildPlanMessages({ profile, cases }) {
+  return [
+    { role: 'system', content: SYSTEM },
+    { role: 'user', content: JSON.stringify(planPayload({ profile, cases })) },
+  ]
+}
+
+/**
+ * Valide et filtre une réponse LLM brute : motifs connus, assertions qui
+ * correspondent à un fait réellement observé, `mustSee` limité aux faits du
+ * motif. Exporté pour que le CLI Perch applique les mêmes règles que le relais.
+ *
+ * @returns {Record<string, object>}
+ */
+export function normalizePlan(parsed, profile) {
+  const factsJson = JSON.stringify(factsForPlan(profile))
+  const mustSeeJson = JSON.stringify(mustSeeFacts(profile))
+  const plan = {}
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return plan
+  for (const [code, entry] of Object.entries(parsed)) {
+    if (!entry || typeof entry !== 'object') continue
+    const motif = MOTIFS.has(entry.motif) ? entry.motif : null
+    const allowed = allowedForMotif(motif, profile)
+    const mustSee = (Array.isArray(entry.mustSee) ? entry.mustSee : [])
+      .map((value) => clean(value, 160))
+      .filter(
+        (value) =>
+          value &&
+          observed(value, mustSeeJson) &&
+          allowed.some(
+            (fact) =>
+              fact.toLowerCase().includes(value.toLowerCase()) ||
+              value.toLowerCase().includes(fact.toLowerCase()),
+          ),
+      )
+      .slice(0, 6)
+    const mustNotSee = (Array.isArray(entry.mustNotSee) ? entry.mustNotSee : [])
+      .map((value) => clean(value, 160))
+      .filter((value) => value && !observed(value, factsJson))
+      .slice(0, 4)
+    plan[code] = {
+      motif,
+      reason: clean(entry.reason, 300),
+      checks: (Array.isArray(entry.checks) ? entry.checks : [])
+        .map((value) => clean(value, 240))
+        .filter(Boolean)
+        .slice(0, 8),
+      mustSee,
+      mustNotSee,
+    }
+  }
+  return plan
+}
+
 /**
  * @returns {Promise<null | { plan: Record<string, object>, model: string, usage: object|null }>}
  */
@@ -227,27 +304,7 @@ export async function planCases({
   // Deux transports : un relais serveur (`proxy`) qui détient la clé, ou un
   // appel direct avec la clé fournie par l'environnement.
   if (!proxy && (!apiKey || !endpoint || !model)) return null
-  const facts = factsForPlan(profile)
-  const factsJson = JSON.stringify(facts)
-  const mustSeeJson = JSON.stringify(mustSeeFacts(profile))
-  const payload = {
-    site: facts.site,
-    facts,
-    cases: (cases ?? []).map((testCase) => ({
-      code: testCase.code,
-      title: testCase.title,
-      description: testCase.description ?? '',
-      steps: (testCase.steps ?? []).map((step) => ({
-        action: step.action,
-        expected: step.expected,
-      })),
-    })),
-  }
-
-  const messages = [
-    { role: 'system', content: SYSTEM },
-    { role: 'user', content: JSON.stringify(payload) },
-  ]
+  const messages = buildPlanMessages({ profile, cases })
 
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
@@ -315,39 +372,7 @@ export async function planCases({
     )
   }
 
-  const plan = {}
-  for (const [code, entry] of Object.entries(parsed)) {
-    if (!entry || typeof entry !== 'object') continue
-    const motif = MOTIFS.has(entry.motif) ? entry.motif : null
-    const allowed = allowedForMotif(motif, profile)
-    const mustSee = (Array.isArray(entry.mustSee) ? entry.mustSee : [])
-      .map((value) => clean(value, 160))
-      .filter(
-        (value) =>
-          value &&
-          observed(value, mustSeeJson) &&
-          allowed.some(
-            (fact) =>
-              fact.toLowerCase().includes(value.toLowerCase()) ||
-              value.toLowerCase().includes(fact.toLowerCase()),
-          ),
-      )
-      .slice(0, 6)
-    const mustNotSee = (Array.isArray(entry.mustNotSee) ? entry.mustNotSee : [])
-      .map((value) => clean(value, 160))
-      .filter((value) => value && !observed(value, factsJson))
-      .slice(0, 4)
-    plan[code] = {
-      motif,
-      reason: clean(entry.reason, 300),
-      checks: (Array.isArray(entry.checks) ? entry.checks : [])
-        .map((value) => clean(value, 240))
-        .filter(Boolean)
-        .slice(0, 8),
-      mustSee,
-      mustNotSee,
-    }
-  }
+  const plan = normalizePlan(parsed, profile)
 
   return {
     plan,

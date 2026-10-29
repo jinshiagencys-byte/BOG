@@ -26,6 +26,7 @@ import { runPlaywrightScenario } from './playwright-executor.mjs'
 import { exploreSite, parsePrice } from './site-explorer.mjs'
 import { enrichCases } from './case-enricher.mjs'
 import { planCases } from './case-planner.mjs'
+import { perchAvailable, planWithPerch } from './perch-planner.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
@@ -115,18 +116,26 @@ const PLAN_MODE = env('WEBMCP_PLAN', 'auto')
 /** Fournisseurs LLM disponibles, essayés dans l’ordre. */
 function planProviders() {
   const providers = []
-  // Le relais serveur passe en premier : il détient la clé et n’expose rien
-  // dans le workflow.
-  if (PLAN_URL && RUN_TOKEN) {
-    providers.push({ label: 'relais', proxy: { url: PLAN_URL, token: RUN_TOKEN } })
-  }
+  // Un endpoint explicitement configuré passe en premier : c'est le choix de
+  // l'opérateur (aujourd'hui TokenHarbor, compatible OpenAI).
   if (env('WEBMCP_PLAN_ENDPOINT')) {
     providers.push({
-      label: 'plan',
+      label: env('WEBMCP_PLAN_LABEL', 'plan'),
       endpoint: env('WEBMCP_PLAN_ENDPOINT'),
       key: env('WEBMCP_PLAN_KEY') || env('OPENCODE_API_KEY') || env('OPENROUTER_API_KEY'),
       model: env('WEBMCP_PLAN_MODEL', 'deepseek-v4.1-flash'),
     })
+  }
+  // Perch ensuite : ses modèles frontier sont fournis par l'abonnement, sans
+  // clé à exposer. Le CLI doit être installé et une session fournie, sinon le
+  // fournisseur n'est pas enregistré.
+  if (perchAvailable()) {
+    providers.push({ label: 'perch', perch: true })
+  }
+  // Puis le relais serveur : il détient la clé et n’expose rien dans le
+  // workflow.
+  if (PLAN_URL && RUN_TOKEN) {
+    providers.push({ label: 'relais', proxy: { url: PLAN_URL, token: RUN_TOKEN } })
   }
   if (env('OPENCODE_API_KEY')) {
     providers.push({
@@ -147,6 +156,7 @@ function planProviders() {
   // Un même fournisseur ne doit pas être tenté deux fois.
   const seen = new Set()
   return providers.filter((provider) => {
+    if (provider.perch) return true
     const id = provider.proxy ? `proxy|${provider.proxy.url}` : `${provider.endpoint}|${provider.model}`
     if (!provider.proxy && !provider.key) return false
     if (seen.has(id)) return false
@@ -241,13 +251,22 @@ async function planFor(siteProfile) {
   if (PLAN_MODE === 'off') return null
   const providers = planProviders()
   if (!providers.length) {
-    if (PLAN_MODE === 'on') console.log('  ⚠ plan LLM demandé mais aucune clé disponible')
+    if (PLAN_MODE === 'on') console.log('  ⚠ plan LLM demandé mais aucun fournisseur disponible')
     return null
   }
   for (const provider of providers) {
     // Un modèle gratuit sature vite : une seconde tentative suffit souvent.
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       try {
+        if (provider.perch) {
+          const result = await planWithPerch({
+            profile: siteProfile,
+            cases,
+            timeoutMs: Number(env('PERCH_TIMEOUT_MS', '240000')),
+          })
+          console.log(`  🧠 plan LLM : ${Object.keys(result.plan).length} cas (${result.model})`)
+          return result.plan
+        }
         const result = await planCases(
           provider.proxy
             ? { profile: siteProfile, cases, proxy: provider.proxy, timeoutMs: 90000 }
