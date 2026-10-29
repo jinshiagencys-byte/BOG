@@ -215,9 +215,18 @@ for (const [route, sel] of [['/products', 'a[href^="/product/"]'], ['/sellers', 
     n = await count(page, sel)
     if (n > 0) break
   }
-  const zero = await page.callFunction(() => /0 (produits?|vendeurs?|artisans?|annonces?)/i.test(document.body.innerText))
+  const sample = await page.callFunction(() => ({
+    zero: /0 (produits?|vendeurs?|artisans?|annonces?)/i.test(document.body.innerText),
+    anchors: [...new Set(Array.from(document.querySelectorAll('a[href^="/"]')).map((a) => a.getAttribute('href').split('?')[0]))].slice(0, 20),
+    text: document.body.innerText.replace(/\s+/g, ' ').slice(0, 220),
+  }))
   const status = has429(api) ? 'blocked' : n > 0 ? 'pass' : 'fail'
-  step(`listing ${route}`, status, `éléments=${n}${zero ? ', affiche « 0 »' : ''}${has429(api) ? ' ; API 429' : ''}`, { api })
+  step(
+    `listing ${route}`,
+    status,
+    `éléments « ${sel} » = ${n}${sample.zero ? ', « 0 » affiché' : ''}${has429(api) ? ' ; API 429' : ''}`,
+    { api, ...sample },
+  )
   await page.close().catch(() => {})
 }
 
