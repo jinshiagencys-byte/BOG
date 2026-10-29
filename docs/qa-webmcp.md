@@ -92,6 +92,21 @@ relève la console, vérifie les textes interdits et remonte les outils WebMCP �
 Elle a été réécrite sur `cdp-client.mjs` : plus de Playwright, même contrat de retour
 (`matched`, `reloadMatched`, `contentMs`, `httpStatus`, `negative`, `webmcp`...).
 
+## Test sur un site réel (CI)
+
+`.github/workflows/real-site-qa.yml` teste une **vraie URL publique** dans la CI :
+Chrome réel + `cdp-client.mjs`, sans Playwright, sans LLM, sans secret. Le script
+`.github/qa/real-site-check.mjs` vérifie HTTP, titre, langue, texte visible, erreurs
+console et surtout que chaque texte / sélecteur attendu est **réellement visible**
+après défilement ; il écrit `report.json` et `screenshot.png` publiés en artefacts.
+
+Cible par défaut : `https://markhorusbj.com` (surchargeable par le champ `url` du
+dispatch). Ne pas confondre avec l'**auto-test du serveur MCP** (section suivante), qui
+tourne, lui, sur une page de démonstration locale (`webmcp-demo.html` sur
+`127.0.0.1:<port aléatoire>`) : deux étages distincts — le contrat du serveur MCP d'un
+côté, le comportement d'un site réel de l'autre. Un site sans outil WebMCP n'est pas un
+échec ici : c'est le repli lecture seule attendu.
+
 ## Lancer depuis l'application
 
 `start-run` accepte :
@@ -173,6 +188,8 @@ curl -sS -X POST https://<ref>.supabase.co/functions/v1/purge-evidence \
 - `.github/qa/webmcp-mcp-server.mjs` — serveur MCP WebMCP (4 outils) ;
 - `.github/qa/webmcp-self-test.mjs` — client MCP de validation ;
 - `.github/workflows/webmcp-self-test.yml` — workflow d'auto-test (ni LLM ni secret) ;
+- `.github/qa/real-site-check.mjs` — test QA sur un site réel (visibilité, capture, rapport) ;
+- `.github/workflows/real-site-qa.yml` — workflow de test sur un site réel (markhorusbj par défaut) ;
 - `.github/qa/page-probe.mjs` — sonde de page de fastbrowse (CDP brut) ;
 - `.github/qa/llm-gemini-proxy.mjs` — proxy Gemini -> OpenAI neutre (TokenHarbor/OpenCode) ;
 - `.github/qa/prompt.md` — prompt de l'agent Antigravity (WebMCP d'abord) ;

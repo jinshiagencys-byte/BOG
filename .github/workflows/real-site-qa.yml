@@ -1,0 +1,86 @@
+name: QA site réel
+
+# Teste une vraie URL publique (pas la page de démonstration locale) dans la CI :
+# Chrome réel + client CDP, sans Playwright, sans LLM et sans secret. Le site est
+# défilé et l'on vérifie que HTTP, titre, langue, texte, erreurs console et
+# éléments attendus (texte / sélecteur) sont réellement visibles à l'écran.
+# Une capture d'écran et un rapport JSON sont publiés en artefacts.
+#
+# Cible par défaut : https://markhorusbj.com (surchargeable à la main).
+# Déclenchement manuel : aucun champ à saisir.
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "URL du site réel à tester"
+        required: false
+        default: "https://markhorusbj.com"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/real-site-qa.yml"
+      - ".github/qa/real-site-check.mjs"
+      - ".github/qa/cdp-client.mjs"
+
+permissions:
+  contents: read
+
+# Un seul test à la fois pour ne pas marteler le site cible.
+concurrency:
+  group: real-site-qa
+  cancel-in-progress: false
+
+jobs:
+  real-site:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Installer Google Chrome
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v google-chrome >/dev/null 2>&1 \
+            && ! command -v google-chrome-stable >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y wget ca-certificates
+            wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
+              -O /tmp/google-chrome.deb
+            sudo apt-get install -y /tmp/google-chrome.deb
+          fi
+          if command -v google-chrome >/dev/null 2>&1; then
+            google-chrome --version
+          else
+            google-chrome-stable --version
+          fi
+
+      - name: QA sur le site réel
+        shell: bash
+        env:
+          REAL_SITE_URL: ${{ github.event.inputs.url || 'https://markhorusbj.com' }}
+          REAL_SITE_TITLE: "Markhorus"
+          REAL_SITE_LANG: "fr"
+          REAL_SITE_VISIBLE: >-
+            ["À propos","DEVIS RAPIDE","Nos Top ventes","Carterie & Papeterie",
+             "Rechercher un produit","Mentions légales"]
+          REAL_SITE_SELECTORS: >-
+            [{"label":"recherche_produit","selector":"input[type=search]","text":"Rechercher un produit"},
+             {"label":"newsletter_email","selector":"input[type=email]","text":"Votre email"}]
+        run: node .github/qa/real-site-check.mjs
+
+      - name: Publier les preuves
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-site-evidence
+          path: .qa-out
+          if-no-files-found: ignore
+          retention-days: 14
