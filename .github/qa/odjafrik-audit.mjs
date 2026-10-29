@@ -174,16 +174,30 @@ await delay(PACE_MS)
   await page.callFunction(() => {
     const input = document.querySelector('input[placeholder="Rechercher des produits, fournisseurs..."]')
     if (!input) return false
+    input.focus()
     input.value = 'Riz'
     input.dispatchEvent(new Event('input', { bubbles: true }))
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true, cancelable: true }))
+    input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', keyCode: 13, bubbles: true, cancelable: true }))
     return true
   })
-  await delay(6000)
-  const url = await page.url()
+  // La recherche n'est valide que si l'URL bascule vers les résultats.
+  let url = await page.url()
+  for (let i = 0; i < 20 && url.replace(/\/$/, '') === BASE; i += 1) {
+    await delay(500)
+    url = await page.url()
+  }
+  await delay(5000)
   const cards = await count(page, 'a[href^="/product/"]')
-  const status = has429(api) ? 'blocked' : cards > 0 ? 'pass' : 'fail'
-  step(`recherche « Riz »`, status, `url=${url}, produits=${cards}${has429(api) ? ' ; API 429 (rate-limit)' : ''}`, { api })
+  const transmitted = /search=|products/.test(url)
+  const status = has429(api) ? 'blocked' : transmitted && cards > 0 ? 'pass' : 'fail'
+  step(
+    `recherche « Riz »`,
+    status,
+    `url=${url}, produits=${cards}, requête transmise=${transmitted}` +
+      (has429(api) ? ' ; API 429 (rate-limit)' : transmitted && cards === 0 ? ' ; 0 résultat pour « Riz »' : ''),
+    { api },
+  )
   await page.close().catch(() => {})
 }
 
@@ -192,8 +206,15 @@ for (const [route, sel] of [['/products', 'a[href^="/product/"]'], ['/sellers', 
   await delay(PACE_MS)
   const { page, api } = await newPage()
   await page.goto(`${BASE}${route}`, { timeoutMs: 60000 }).catch(() => {})
-  await delay(8000)
-  const n = await count(page, sel)
+  // Les listes se chargent parfois après le premier écran : on attend et on
+  // défile pour déclencher un éventuel chargement paresseux (jusqu'à ~20 s).
+  let n = 0
+  for (let i = 0; i < 14; i += 1) {
+    await delay(1500)
+    await page.evaluate('window.scrollTo(0, document.body.scrollHeight)').catch(() => {})
+    n = await count(page, sel)
+    if (n > 0) break
+  }
   const zero = await page.callFunction(() => /0 (produits?|vendeurs?|artisans?|annonces?)/i.test(document.body.innerText))
   const status = has429(api) ? 'blocked' : n > 0 ? 'pass' : 'fail'
   step(`listing ${route}`, status, `éléments=${n}${zero ? ', affiche « 0 »' : ''}${has429(api) ? ' ; API 429' : ''}`, { api })
