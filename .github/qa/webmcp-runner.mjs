@@ -52,6 +52,30 @@ function cleanText(value, max = 700) {
   return String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, max)
 }
 
+/**
+ * Normalise avant comparaison : espaces insécables, espaces fines et
+ * apostrophes typographiques. Sans cela, « 15,000 FCFA » ne correspond pas à
+ * « 15,000 FCFA » si la page utilise une espace insécable — un faux échec.
+ */
+function normalizeForMatch(value) {
+  return String(value ?? '')
+    .replace(/[\u00a0\u2007\u2009\u202f]/g, ' ')
+    .replace(/[\u2018\u2019\u02bc]/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/** Les attentes restent des expressions régulières (`\\d+`, `a|b`). */
+function textMatches(pattern, text) {
+  const haystack = normalizeForMatch(text)
+  const needle = normalizeForMatch(pattern)
+  try {
+    return new RegExp(needle, 'i').test(haystack)
+  } catch {
+    return haystack.toLowerCase().includes(needle.toLowerCase())
+  }
+}
+
 function formatMs(ms) {
   if (ms == null || !Number.isFinite(ms)) return 'non mesuré'
   return `${(ms / 1000).toFixed(1).replace('.', ',')} s`
@@ -399,11 +423,11 @@ function verifyWebMcp(spec, execution) {
   const expect = spec.expect ?? {}
   const textChecks = (expect.text ?? []).map((pattern) => ({
     pattern,
-    ok: new RegExp(pattern, 'i').test(text),
+    ok: textMatches(pattern, text),
   }))
   const negativeChecks = (expect.failIfText ?? []).map((pattern) => ({
     pattern,
-    matched: new RegExp(pattern, 'i').test(text),
+    matched: textMatches(pattern, text),
   }))
   const negative = negativeChecks.find((check) => check.matched)?.pattern ?? null
   const urlOk = !expect.url || new RegExp(expect.url, 'i').test(url)
@@ -540,11 +564,11 @@ function verifyPlaywright(spec, execution) {
   const expect = spec.expect ?? {}
   const textChecks = (expect.text ?? []).map((pattern) => ({
     pattern,
-    ok: new RegExp(pattern, 'i').test(text),
+    ok: textMatches(pattern, text),
   }))
   const negativeChecks = (expect.failIfText ?? []).map((pattern) => ({
     pattern,
-    matched: new RegExp(pattern, 'i').test(text),
+    matched: textMatches(pattern, text),
   }))
   const negative = negativeChecks.find((check) => check.matched)?.pattern ?? null
   const urlOk = !expect.url || new RegExp(expect.url, 'i').test(url)
