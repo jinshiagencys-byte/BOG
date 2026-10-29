@@ -54,10 +54,14 @@ on:
       target_url:
         description: "URL cible par défaut (facultative)"
         required: false
+        default: "https://odjafrik.com"
         type: string
       manifest_file:
-        description: "Manifeste du dépôt à exécuter sans Supabase (ex. .github/qa/playwright-odjafrik-manifest.json)"
+        description: "Manifeste du dépôt à exécuter sans Supabase (vide = mode démonstration)"
         required: false
+        # Déclenchement manuel prêt à l'emploi : site réel, 7 cas, sans
+        # Supabase (résultats et vidéos dans l'artefact du run).
+        default: ".github/qa/playwright-odjafrik-manifest.json"
         type: string
       cases_file:
         description: "Catalogue des objectifs (WebMCP ou scénarios Playwright)"
