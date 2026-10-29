@@ -36,6 +36,17 @@ const STORAGE_STATE = env('WEBMCP_STORAGE_STATE')
 const HEADLESS = !['0', 'false', 'no', 'off'].includes(String(env('WEBMCP_HEADLESS', 'true')).toLowerCase())
 const CONFIRM_DEFAULT = ['accept', 'true', '1'].includes(String(env('WEBMCP_CONFIRM', 'dismiss')).toLowerCase())
 
+// Fenêtre fixée : la taille par défaut de Chrome headless (~780x493) est sous le
+// point de rupture desktop de nombreux sites, ce qui fait mesurer 0x0 les
+// éléments réservés au desktop et les déclare « non visibles ». On aligne donc le
+// viewport du serveur MCP sur celui de la sonde (`page-probe.mjs`, 1440x900) pour
+// que les deux surfaces QA rendent le même verdict. Surchargeable par WEBMCP_VIEWPORT.
+const VIEWPORT = (() => {
+  const match = /^(\d{2,5})\s*[x×]\s*(\d{2,5})$/i.exec(String(env('WEBMCP_VIEWPORT', '1440x900')).trim())
+  if (!match) return { width: 1440, height: 900 }
+  return { width: Number(match[1]), height: Number(match[2]) }
+})()
+
 function log(...args) {
   process.stderr.write(`${new Date().toISOString()} [webmcp-mcp] ${args.join(' ')}\n`)
 }
@@ -61,6 +72,10 @@ async function activePage() {
   const current = await ensureBrowser()
   if (page) return page
   page = await current.newPage()
+  await page.connection
+    .send('Emulation.setDeviceMetricsOverride', { ...VIEWPORT, deviceScaleFactor: 1, mobile: false }, page.sessionId)
+    .catch(() => {})
+  await page.connection.send('Emulation.setLocaleOverride', { locale: 'fr-FR' }, page.sessionId).catch(() => {})
   if (STORAGE_STATE && existsSync(STORAGE_STATE)) {
     try {
       await page.applyStorageState(JSON.parse(readFileSync(STORAGE_STATE, 'utf8')))
@@ -99,13 +114,18 @@ async function listWebMcpTools(target, { waitFor = null, timeoutMs = 8000 } = {}
       rows = null
     }
     if (rows === null) {
-      return { available: false, tools: [], reason: 'document.modelContext absent (flag WebMCPTesting ?)' }
+      return { available: false, apiPresent: false, tools: [], reason: 'document.modelContext absent (flag WebMCPTesting ?)' }
     }
     if (!Array.isArray(rows)) {
-      return { available: true, tools: [], reason: rows.__error ?? 'getTools a échoué' }
+      return { available: false, apiPresent: true, tools: [], reason: rows.__error ?? 'getTools a échoué' }
     }
     if (!waitFor || rows.some((tool) => tool.name === waitFor) || Date.now() >= deadline) {
-      return { available: true, tools: rows }
+      // Chrome expose `document.modelContext` (avec `getTools()`) sur toute origine
+      // sécurisée réelle, même quand la page n'enregistre aucun outil. `available`
+      // ne doit donc pas dire « l'API existe » mais « il y a des outils à appeler »,
+      // sinon tout site paraît pilotable et Antigravity tente des appels voués à
+      // l'échec. La présence brute de l'API est exposée à part via `apiPresent`.
+      return { available: rows.length > 0, apiPresent: true, tools: rows }
     }
     await delay(250)
   }
@@ -135,14 +155,26 @@ async function scrollThrough(target, { steps = 8, pauseMs = 250 } = {}) {
 // le fait défiler jusqu'à la fenêtre et on vérifie sa boîte. Tout se passe dans
 // la page, en un seul aller-retour CDP.
 function visibleTextChecks(patterns) {
+  // Le libellé d'un champ vit dans son attribut `placeholder` (ou `aria-label`,
+  // `title`, `value`), jamais dans son `textContent` : sans ces attributs, vérifier
+  // une recherche ou un email par son texte donne un faux négatif. On ignore en
+  // retour les balises non textuelles (`script`, `style`, …), dont les payloads
+  // matchent des motifs par hasard.
+  const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'TEMPLATE', 'NOSCRIPT', 'HEAD', 'META', 'LINK', 'TITLE'])
+  const describe = (element) => {
+    const parts = [element.textContent || '']
+    for (const name of ['placeholder', 'aria-label', 'title']) parts.push(element.getAttribute?.(name) || '')
+    if (typeof element.value === 'string') parts.push(element.value)
+    return parts.join('\n')
+  }
   const findMatches = (re) => {
+    const test = (element) => !SKIP_TAGS.has(element.tagName) && re.test(describe(element))
     const out = []
     const visit = (element) => {
-      const text = element.textContent || ''
-      if (!re.test(text)) return
+      if (!test(element)) return
       let descended = false
       for (const child of element.children) {
-        if (re.test(child.textContent || '')) {
+        if (test(child)) {
           descended = true
           visit(child)
         }
@@ -264,8 +296,15 @@ async function callTool(name, args = {}) {
         url: await target.url(),
         title: await target.title().catch(() => ''),
         webmcpAvailable: listed.available,
+        webmcpApiPresent: listed.apiPresent,
         tools: listed.tools,
-        ...(listed.reason ? { reason: listed.reason } : {}),
+        ...(listed.available
+          ? {}
+          : {
+              reason:
+                listed.reason ??
+                'document.modelContext présent mais aucun outil WebMCP enregistré (repli lecture seule)',
+            }),
       })
     }
     case 'webmcp_list_tools': {

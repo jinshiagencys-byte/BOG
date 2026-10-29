@@ -48,9 +48,21 @@ Antigravity qui décide**, et les outils exposés par la page exécutent.
   sans `confirm: true`, l'outil renvoie `cancelled`. L'agent doit accepter explicitement,
   comme un utilisateur prudent.
 - `webmcp_read_page` amène chaque motif à l'écran (`scrollIntoView`) avant de conclure :
-  un texte présent dans le DOM mais jamais affiché ne compte pas.
+  un texte présent dans le DOM mais jamais affiché ne compte pas. La recherche de motif
+  couvre aussi `placeholder`, `aria-label`, `title` et `value` (le libellé d'un champ n'est
+  pas dans son `textContent`, sinon une recherche ou un email serait un faux négatif), et
+  ignore les balises non textuelles (`script`, `style`, …).
+- Le serveur MCP fixe le **même viewport que la sonde fastbrowse** (1440x900, locale
+  `fr-FR`, surchargeable par `WEBMCP_VIEWPORT`). Sans cela, Chrome headless démarre en
+  ~780x493 : sous le point de rupture desktop de nombreux sites, les éléments réservés au
+  desktop mesurent 0x0 et étaient déclarés « non visibles », en désaccord avec la sonde.
+- `webmcpAvailable` (et `available` de `webmcp_list_tools`) ne vaut `true` que s'il existe
+  des **outils utilisables** (`tools.length > 0`). Chrome expose en effet
+  `document.modelContext` sur toute origine sécurisée réelle, même sans aucun outil : la
+  simple présence de l'API est remontée à part via `webmcpApiPresent`, et l'absence d'outil
+  s'accompagne d'un `reason` explicite pour éviter que l'agent croie le site pilotable.
 - Une page qui n'expose **aucun** outil WebMCP retombe sur le sous-agent navigateur natif
-  `browser` (Chrome DevTools/CDP) pour ce cas.
+  `browser` (Chrome DevTools/CDP) pour ce cas, ou en lecture seule via `webmcp_read_page`.
 - Le LLM passe par un proxy Gemini -> OpenAI Chat Completions neutre
   (`.github/qa/llm-gemini-proxy.mjs`) : TokenHarbor par défaut (`TOKENHARBOR_API_KEY`),
   sinon OpenCode Zen (`OPENCODE_API_KEY`), sinon les variables de dépôt
