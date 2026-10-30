@@ -89,6 +89,9 @@ function buildEnv() {
 }
 
 const env = buildEnv()
+// Un modèle « free » (TokenHarbor `:free`, OpenCode `-free`, OpenRouter `:free`)
+// ne rapporte aucun coût : le plafond en dollars est alors inapplicable.
+const FREE_MODEL = /free/i.test(`${env.FASTBROWSE_LLM_MODEL || ''}`)
 
 const GOALS = [
   {
@@ -152,8 +155,11 @@ function runOnce(goal) {
     '--json',
     '--local',
     '--max-steps', String(MAX_STEPS),
-    '--max-dollars', String(MAX_DOLLARS),
   ]
+  // Un modèle gratuit rapporte un coût de 0 ; fastbrowse refuse alors d'appliquer
+  // un plafond en dollars (« a call reported no cost »). On omet donc
+  // `--max-dollars` pour un modèle `*-free`, et quand la limite est à 0.
+  if (!FREE_MODEL && MAX_DOLLARS > 0) args.push('--max-dollars', String(MAX_DOLLARS))
   return new Promise((resolvePromise) => {
     const started = performance.now()
     let stdout = ''

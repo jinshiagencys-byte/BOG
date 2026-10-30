@@ -19,9 +19,9 @@ on:
         required: false
         default: "auto"
       jev_model:
-        description: "Modèle Jev (ex. jev-1.13 ou jev-1.13-free)"
+        description: "Modèle Jev (vide = défaut du fournisseur, ex. jev-1.13-free)"
         required: false
-        default: "jev-1.13"
+        default: ""
       llm_model:
         description: "Modèle LLM (opencode : deepseek-v4.1-flash ; openrouter : id OpenRouter)"
         required: false
@@ -108,7 +108,7 @@ jobs:
           QA_OUTPUT: ${{ github.workspace }}/qa-smoke.json
           SMOKE_URL: ${{ github.event.inputs.url || 'https://example.com' }}
           SMOKE_PROVIDER: ${{ github.event.inputs.provider || 'auto' }}
-          SMOKE_JEV_MODEL: ${{ github.event.inputs.jev_model || 'jev-1.13' }}
+          SMOKE_JEV_MODEL: ${{ github.event.inputs.jev_model }}
           SMOKE_LLM_MODEL: ${{ github.event.inputs.llm_model }}
           TOKENHARBOR_API_KEY: ${{ secrets.TOKENHARBOR_API_KEY }}
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
