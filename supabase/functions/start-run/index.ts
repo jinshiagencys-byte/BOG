@@ -109,8 +109,30 @@ Deno.serve(async (req) => {
   if (integrationError) {
     return fail('GITHUB_QUERY_FAILED', 500, integrationError.message);
   }
-  if (!integration) return fail('GITHUB_NOT_CONFIGURED', 409);
-  if (!integration.installation_id) {
+
+  // Repli sur les valeurs du déploiement quand l'organisation n'a pas encore
+  // d'intégration enregistrée : le lancement utilise alors le dépôt, l'installation
+  // et le workflow configurés pour ce serveur, au lieu d'échouer.
+  const fallbackRepo = (Deno.env.get('GITHUB_REPO_FULL_NAME') ?? '').trim();
+  const fallbackInstallation = (Deno.env.get('GITHUB_INSTALLATION_ID') ?? '').trim();
+  const target = integration
+    ? {
+      repo: integration.repo_full_name,
+      workflow: integration.workflow_file || 'antigravity-qa.yml',
+      branch: integration.default_branch || 'main',
+      installation: integration.installation_id,
+    }
+    : fallbackRepo && fallbackInstallation
+    ? {
+      repo: fallbackRepo,
+      workflow: (Deno.env.get('GITHUB_WORKFLOW_FILE') ?? '').trim() || 'antigravity-qa.yml',
+      branch: (Deno.env.get('GITHUB_DEFAULT_BRANCH') ?? '').trim() || 'main',
+      installation: Number(fallbackInstallation),
+    }
+    : null;
+
+  if (!target) return fail('GITHUB_NOT_CONFIGURED', 409);
+  if (!target.installation) {
     return fail('GITHUB_INSTALLATION_MISSING', 409);
   }
 
@@ -159,16 +181,19 @@ Deno.serve(async (req) => {
     ?? configuredModel
     ?? 'big-pickle';
 
-  // fastbrowse est l'exécuteur par défaut. Antigravity (décideur LLM + outils
-  // WebMCP) reste sélectionnable explicitement. L'ancien exécuteur WebMCP
-  // Playwright a été retiré : une demande `webmcp` pointe désormais sur le
-  // workflow Antigravity. IronBee n'est plus déclenché.
-  const executor = body.executor === 'antigravity' || body.executor === 'webmcp'
+  // L'exécuteur suit le workflow configuré pour l'organisation (ou le repli du
+  // déploiement) : un workflow `antigravity-*` lance Antigravity, un workflow
+  // `fastbrowse-*` lance fastbrowse. Une demande explicite reste prioritaire.
+  const requestedExecutor = body.executor === 'antigravity' || body.executor === 'webmcp'
     ? 'antigravity'
-    : 'fastbrowse';
-  const workflowFile = executor === 'fastbrowse'
-    ? 'fastbrowse-qa.yml'
-    : integration.workflow_file || 'antigravity-qa.yml';
+    : body.executor === 'fastbrowse'
+    ? 'fastbrowse'
+    : null;
+  const executor = requestedExecutor
+    ?? (/antigravity/i.test(target.workflow) ? 'antigravity' : 'fastbrowse');
+  const workflowFile = requestedExecutor
+    ? (executor === 'fastbrowse' ? 'fastbrowse-qa.yml' : target.workflow)
+    : target.workflow;
 
   // Le manifeste SQL reste figé sur son ancien libellé ; on aligne la ligne du
   // run tout de suite pour que l'UI et les rapports partiels soient cohérents.
@@ -183,12 +208,12 @@ Deno.serve(async (req) => {
   if (executor === 'antigravity') inputs.model = model;
 
   try {
-    const githubToken = await installationToken(Number(integration.installation_id));
+    const githubToken = await installationToken(Number(target.installation));
     await dispatchWorkflow({
       token: githubToken,
-      repoFullName: integration.repo_full_name,
+      repoFullName: target.repo,
       workflowFile,
-      ref: integration.default_branch || 'main',
+      ref: target.branch,
       inputs,
     });
   } catch (error) {
