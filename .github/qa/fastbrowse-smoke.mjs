@@ -95,9 +95,9 @@ const FREE_MODEL = /free/i.test(`${env.FASTBROWSE_LLM_MODEL || ''}`)
 
 const GOALS = [
   {
-    name: 'heading',
-    goal: `Va sur cette page et donne le texte exact du titre principal (h1).`,
-    check: (json) => /internet\s+assigned\s+numbers\s+authority/i.test(JSON.stringify(json)),
+    name: 'paragraph',
+    goal: `Va sur cette page et donne le texte exact du premier paragraphe visible sous le titre.`,
+    check: (json) => /global coordination of the DNS root/i.test(JSON.stringify(json)),
   },
   {
     name: 'navigate',
