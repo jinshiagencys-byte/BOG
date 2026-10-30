@@ -1,12 +1,11 @@
-name: Antigravity QA — WebMCP
+name: Antigravity QA — Chrome DevTools MCP
 
 # Exécution d'un run sélectionné depuis l'application.
 # L'agent est Antigravity CLI (`agy`). Il décide du parcours et exécute les cas
-# en appelant les outils WebMCP que la page expose, via le serveur MCP local
-# `.github/qa/webmcp-mcp-server.mjs` branché sur le Chrome du run :
-#   - sous-agent navigateur natif `browser` : Chrome DevTools en `--autoConnect` ;
-#   - serveur MCP `webmcp` : WebMCP, branché via `WEBMCP_CDP_URL` sur le même Chrome.
-# Une page qui n'expose aucun outil WebMCP est traitée par le sous-agent navigateur.
+# avec **Chrome DevTools MCP**, la surface du sous-agent navigateur natif
+# `browser`, branché sur le Chrome du run via `--autoConnect`. Chaque action
+# (naviguer, cliquer, saisir) est suivie d'une vérification et de la preuve
+# obtenue : snapshot de la page, statut des requêtes réseau, messages console.
 #
 # Antigravity ne parle qu'à un endpoint Gemini-compatible ; un proxy local traduit
 # Gemini <-> OpenAI Chat Completions. Le fournisseur est configurable :
@@ -91,7 +90,6 @@ jobs:
             --disable-dev-shm-usage \
             --remote-debugging-port=0 \
             --remote-allow-origins='*' \
-            --enable-features=WebMCPTesting \
             --user-data-dir="$CHROME_PROFILE" \
             about:blank > chrome.log 2>&1 &
           echo $! > chrome.pid
@@ -114,11 +112,10 @@ jobs:
             exit 1
           fi
           echo "✓ Chrome CDP prêt sur le port $(head -n1 "$CHROME_PROFILE/DevToolsActivePort")"
-          # Le serveur MCP WebMCP se branche sur ce même Chrome : une seule
-          # instance, donc une seule page observée par les deux clients.
+          # Le Chrome partagé sert au sous-agent navigateur (Chrome DevTools MCP) et
+          # à l'injection de la session authentifiée, via la même connexion CDP.
           CDP_PORT=$(head -n1 "$CHROME_PROFILE/DevToolsActivePort")
-          echo "WEBMCP_CDP_URL=http://127.0.0.1:$CDP_PORT" >> "$GITHUB_ENV"
-          echo "webmcp_cdp_url=http://127.0.0.1:$CDP_PORT" >> "$GITHUB_OUTPUT"
+          echo "CDP_URL=http://127.0.0.1:$CDP_PORT" >> "$GITHUB_ENV"
 
       - name: Installer Antigravity CLI
         shell: bash
@@ -139,9 +136,7 @@ jobs:
             "toolPermission": "always-proceed",
             "enableTerminalSandbox": true,
             "permissions": {
-              "allow": [
-                "mcp(webmcp/*)"
-              ],
+              "allow": [],
               "deny": [
                 "command()",
                 "unsandboxed()",
@@ -158,44 +153,6 @@ jobs:
           }
           EOF
           cat "$HOME/.gemini/antigravity-cli/settings.json"
-
-      - name: Déclarer le serveur MCP WebMCP
-        env:
-          STORAGE_STATE: ${{ secrets.WEBMCP_STORAGE_STATE }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          : "${WEBMCP_CDP_URL:?WEBMCP_CDP_URL attendu (étape Chrome)}"
-          STORAGE=""
-          if [ -n "${STORAGE_STATE:-}" ]; then
-            printf '%s' "$STORAGE_STATE" > "$RUNNER_TEMP/webmcp-storage.json"
-            chmod 600 "$RUNNER_TEMP/webmcp-storage.json"
-            STORAGE="$RUNNER_TEMP/webmcp-storage.json"
-          fi
-          mkdir -p "$GITHUB_WORKSPACE/videos"
-          WEBMCP_STORAGE="$STORAGE" python3 - <<'PY'
-          import json, os
-          workspace = os.environ["GITHUB_WORKSPACE"]
-          env = {
-              "WEBMCP_CDP_URL": os.environ["WEBMCP_CDP_URL"],
-              # Par défaut, une confirmation de mutation est refusée : l'agent
-              # doit l'accepter explicitement, comme un utilisateur prudent.
-              "WEBMCP_CONFIRM": "dismiss",
-          }
-          if os.environ.get("WEBMCP_STORAGE"):
-              env["WEBMCP_STORAGE_STATE"] = os.environ["WEBMCP_STORAGE"]
-          config = {"mcpServers": {"webmcp": {
-              "command": "node",
-              "args": [os.path.join(workspace, ".github/qa/webmcp-mcp-server.mjs")],
-              "env": env,
-              "timeoutSeconds": 300,
-          }}}
-          path = os.path.expanduser("~/.gemini/config/mcp_config.json")
-          os.makedirs(os.path.dirname(path), exist_ok=True)
-          with open(path, "w", encoding="utf-8") as handle:
-              json.dump(config, handle, indent=2, ensure_ascii=False)
-          print(open(path, encoding="utf-8").read())
-          PY
 
       - name: Récupérer le manifeste du run
         env:
@@ -346,7 +303,23 @@ jobs:
           fi
           echo "✓ Modèle disponible : $LLM_MODEL"
 
-      - name: Exécuter l'agent QA (Antigravity + WebMCP)
+      - name: Injecter la session authentifiée dans Chrome
+        env:
+          STORAGE_STATE: ${{ secrets.WEBMCP_STORAGE_STATE }}
+        shell: bash
+        run: |
+          set +e
+          if [ -z "${STORAGE_STATE:-}" ]; then
+            echo "Session authentifiée : aucun secret WEBMCP_STORAGE_STATE — cas publics seulement."
+            exit 0
+          fi
+          printf '%s' "$STORAGE_STATE" > "$RUNNER_TEMP/qa-storage.json"
+          chmod 600 "$RUNNER_TEMP/qa-storage.json"
+          WEBMCP_CDP_URL="$CDP_URL" \
+          WEBMCP_STORAGE_STATE="$RUNNER_TEMP/qa-storage.json" \
+            node .github/qa/seed-storage-state.mjs
+
+      - name: Exécuter l'agent QA (Antigravity + Chrome DevTools MCP)
         id: qa_agent
         env:
           TARGET_URL: ${{ steps.prompt.outputs.target_url }}
@@ -372,7 +345,7 @@ jobs:
           QA_PROMPT=$(cat qa_prompt.txt)
           printf '%s' "$QA_PROMPT" > trajectories/qa_prompt.txt
           echo "🎯 Cible : $TARGET_URL"
-          echo "🌐 Exécution : outils WebMCP (serveur MCP webmcp) + sous-agent navigateur"
+          echo "🌐 Exécution : Chrome DevTools MCP (sous-agent navigateur)"
 
           # Pas de --dangerously-skip-permissions : il contourne aussi les règles
           # deny et autoriserait run_command. `toolPermission: always-proceed`
