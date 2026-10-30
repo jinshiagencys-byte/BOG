@@ -1,0 +1,131 @@
+name: fastbrowse smoke — Jev + LLM
+
+# Test de fumée de la chaîne QA fastbrowse : Jev (System One) + LLM + navigateur
+# réel, avec les clés du dépôt. Aucun run Supabase requis : deux objectifs fixes
+# sur une URL publique. Sert à vérifier qu'une clé (OpenCode ou OpenRouter)
+# fonctionne avant de lancer un vrai run QA.
+#
+# Déclenchement manuel : aucun champ obligatoire.
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "URL publique de test"
+        required: false
+        default: "https://example.com"
+      provider:
+        description: "Fournisseur : auto | opencode | openrouter"
+        required: false
+        default: "auto"
+      jev_model:
+        description: "Modèle Jev (ex. jev-1.13 ou jev-1.13-free)"
+        required: false
+        default: "jev-1.13"
+      llm_model:
+        description: "Modèle LLM (opencode : deepseek-v4.1-flash ; openrouter : id OpenRouter)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fastbrowse-smoke
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Installer Google Chrome
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v google-chrome >/dev/null 2>&1 \
+            && ! command -v google-chrome-stable >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y wget ca-certificates
+            wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -O /tmp/google-chrome.deb
+            sudo apt-get install -y /tmp/google-chrome.deb
+          fi
+          google-chrome --version 2>/dev/null || google-chrome-stable --version
+
+      - name: Installer uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Construire fastbrowse
+        shell: bash
+        env:
+          FASTBROWSE_COMMIT: e46c12a14e5cf5034e69eb7d5a21856eb0f0dc27
+          UV_PYTHON: "3.13"
+        run: |
+          set -euo pipefail
+          rm -rf _fastbrowse
+          mkdir _fastbrowse
+          cd _fastbrowse
+          git init -q
+          git remote add origin https://github.com/agent-labs-dev/fastbrowse.git
+          git fetch -q --depth 1 origin "$FASTBROWSE_COMMIT"
+          git checkout -q FETCH_HEAD
+          uv sync --frozen --no-dev
+          test -x .venv/bin/fastbrowse
+          echo "✓ $(.venv/bin/fastbrowse --version)"
+
+      - name: Vérifier les clés
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "OPENCODE_API_KEY : $([ -n "${OPENCODE_API_KEY:-}" ] && echo présente || echo absente)"
+          echo "OPENROUTER_API_KEY : $([ -n "${OPENROUTER_API_KEY:-}" ] && echo présente || echo absente)"
+          if [ -z "${OPENCODE_API_KEY:-}" ] && [ -z "${OPENROUTER_API_KEY:-}" ]; then
+            echo "::error::Ni OPENCODE_API_KEY ni OPENROUTER_API_KEY. Ajoute au moins une clé dans Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+
+      - name: Test de fumée fastbrowse
+        id: smoke
+        env:
+          FASTBROWSE_CLI: ${{ github.workspace }}/_fastbrowse/.venv/bin/fastbrowse
+          FASTBROWSE_DIR: ${{ github.workspace }}/_fastbrowse
+          FASTBROWSE_CHROME: /usr/bin/google-chrome
+          QA_OUTPUT: ${{ github.workspace }}/qa-smoke.json
+          SMOKE_URL: ${{ github.event.inputs.url || 'https://example.com' }}
+          SMOKE_PROVIDER: ${{ github.event.inputs.provider || 'auto' }}
+          SMOKE_JEV_MODEL: ${{ github.event.inputs.jev_model || 'jev-1.13' }}
+          SMOKE_LLM_MODEL: ${{ github.event.inputs.llm_model }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        shell: bash
+        run: |
+          set +e
+          node .github/qa/fastbrowse-smoke.mjs
+          CODE=$?
+          echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
+          if [ "$CODE" -ne 0 ]; then
+            echo "::error::Test de fumée fastbrowse : aucun résultat exploitable (code $CODE)"
+          fi
+          exit "$CODE"
+
+      - name: Archiver la preuve
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fastbrowse-smoke
+          path: qa-smoke.json
+          if-no-files-found: warn
+          retention-days: 14
