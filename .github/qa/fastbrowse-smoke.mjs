@@ -24,7 +24,7 @@
  */
 
 import { spawn } from 'node:child_process'
-import { existsSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { performance } from 'node:perf_hooks'
@@ -34,9 +34,14 @@ const ROOT = resolve(process.env.QA_ROOT || join(HERE, '..', '..'))
 const FASTBROWSE_DIR = resolve(process.env.FASTBROWSE_DIR || join(ROOT, '..', 'fastbrowse'))
 const LOCAL_CLI = join(FASTBROWSE_DIR, '.venv', 'bin', 'fastbrowse')
 const FASTBROWSE_CLI = process.env.FASTBROWSE_CLI || (existsSync(LOCAL_CLI) ? LOCAL_CLI : 'fastbrowse')
-const TARGET_URL = process.env.SMOKE_URL || 'https://www.iana.org/'
+const TARGET_URL = process.env.SMOKE_URL || 'https://odjafrik.com/'
 const OUT = resolve(process.env.QA_OUTPUT || join(ROOT, 'qa-smoke.json'))
-const CASE_TIMEOUT_MS = Number(process.env.SMOKE_TIMEOUT_MS || '180000')
+// Vidéo de la session (screencast Chrome -> ffmpeg). `SMOKE_RECORD=0` la désactive.
+const RECORD_DIR = process.env.SMOKE_RECORD === '0'
+  ? null
+  : resolve(process.env.SMOKE_RECORD_DIR || join(ROOT, 'recordings'))
+if (RECORD_DIR) mkdirSync(RECORD_DIR, { recursive: true })
+const CASE_TIMEOUT_MS = Number(process.env.SMOKE_TIMEOUT_MS || '240000')
 const MAX_STEPS = Number(process.env.SMOKE_MAX_STEPS || '12')
 const MAX_DOLLARS = Number(process.env.SMOKE_MAX_DOLLARS || '0.10')
 
@@ -95,14 +100,14 @@ const FREE_MODEL = /free/i.test(`${env.FASTBROWSE_LLM_MODEL || ''}`)
 
 const GOALS = [
   {
-    name: 'paragraph',
-    goal: `Va sur cette page et donne le texte exact du premier paragraphe visible sous le titre.`,
-    check: (json) => /global coordination of the DNS root/i.test(JSON.stringify(json)),
+    name: 'read',
+    goal: `Va sur cette page et donne le texte exact du titre principal (h1) affiché en haut de la page.`,
+    check: (json) => /meilleur du b[eé]nin/i.test(JSON.stringify(json)),
   },
   {
-    name: 'navigate',
-    goal: `Clique sur le lien « Domains » du menu principal et donne l'URL finale obtenue.`,
-    check: (json) => /iana\.org\/domains/i.test(JSON.stringify(json)),
+    name: 'search',
+    goal: `Utilise la barre de recherche du site avec le mot « Riz », valide la recherche, puis donne le nombre exact de résultats affichés.`,
+    check: (json) => /\d/.test(String(json.answer || '')),
   },
 ]
 
@@ -160,6 +165,9 @@ function runOnce(goal) {
   // un plafond en dollars (« a call reported no cost »). On omet donc
   // `--max-dollars` pour un modèle `*-free`, et quand la limite est à 0.
   if (!FREE_MODEL && MAX_DOLLARS > 0) args.push('--max-dollars', String(MAX_DOLLARS))
+  // Vidéo de la session : fastbrowse écrit `<nom>.mp4` (légendé) et `<nom>.plain.mp4`.
+  const recordPath = RECORD_DIR ? join(RECORD_DIR, `${goal.name}.mp4`) : null
+  if (recordPath) args.push('--record', recordPath)
   return new Promise((resolvePromise) => {
     const started = performance.now()
     let stdout = ''
@@ -195,6 +203,9 @@ function runOnce(goal) {
         parseError,
         stderr: stderr.slice(-4000),
         checkOk: json ? Boolean(goal.check(json)) : false,
+        recordings: RECORD_DIR
+          ? readdirSync(RECORD_DIR).filter((f) => f.startsWith(goal.name) && f.endsWith('.mp4')).map((f) => join(RECORD_DIR, f))
+          : [],
       })
     }
     child.on('error', (error) => { stderr += `\n${error.message}`; finish(127) })
@@ -240,6 +251,7 @@ for (const goal of GOALS) {
       stderr: `LLM indisponible (HTTP ${llm.status})`,
       checkOk: false,
       skipped: true,
+      recordings: [],
     })
     continue
   }
@@ -255,6 +267,7 @@ for (const goal of GOALS) {
     console.log(`  parse : ${run.parseError}`)
   }
   if (run.stderr) console.log(`  stderr : ${run.stderr.split('\n').slice(-3).join(' | ')}`)
+  if (run.recordings?.length) console.log(`  vidéo : ${run.recordings.join(', ')}`)
 }
 
 const payable = results.filter((run) => run.json).length
@@ -266,6 +279,7 @@ const summary = {
   goals: results.length,
   exploitable: payable,
   ok: results.filter((run) => run.checkOk).length,
+  recordings: results.flatMap((run) => run.recordings ?? []),
   results: results.map((run) => ({
     name: run.name,
     exitCode: run.exitCode,
@@ -278,6 +292,7 @@ const summary = {
     answer: run.json?.answer ?? null,
     error: run.json?.error ?? null,
     steps: Array.isArray(run.json?.steps) ? run.json.steps.length : 0,
+    recordings: run.recordings ?? [],
     stderr: run.stderr || null,
   })),
 }
@@ -289,6 +304,7 @@ console.log(JSON.stringify({
   llm: llm.status,
   exploitable: summary.exploitable,
   ok: summary.ok,
+  videos: summary.recordings.length,
 }))
 
 // Échec dur uniquement si la chaîne n'a produit aucun résultat exploitable.
