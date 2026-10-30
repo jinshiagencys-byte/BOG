@@ -105,9 +105,9 @@ const GOALS = [
     check: (json) => /meilleur du b[eé]nin/i.test(JSON.stringify(json)),
   },
   {
-    name: 'search',
-    goal: `Utilise la barre de recherche du site avec le mot « Riz », valide la recherche, puis donne le nombre exact de résultats affichés.`,
-    check: (json) => /\d/.test(String(json.answer || '')),
+    name: 'navigate',
+    goal: `Clique sur le lien « Vendeurs » du menu principal, puis donne l'URL finale obtenue.`,
+    check: (json) => /odjafrik\.com\/sellers/i.test(JSON.stringify(json)),
   },
 ]
 
