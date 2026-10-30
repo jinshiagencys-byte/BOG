@@ -71,33 +71,62 @@ const MAX_STEPS = Number(env('FASTBROWSE_MAX_STEPS', '25'))
 const MAX_DOLLARS = Number(env('FASTBROWSE_MAX_DOLLARS', '0.10'))
 const ONLY = env('CASE_CODES', '').split(',').map((value) => value.trim()).filter(Boolean)
 
+// Deux fournisseurs distincts, chacun sa clé :
+//   - LLM (planification/lecture) : TokenHarbor par défaut, modèle gratuit `*-free` ;
+//   - Jev (System One)            : OpenCode par défaut, modèle gratuit `*-free`.
+// Toute variable d'environnement explicite reste prioritaire : aucun repli silencieux.
 const fastbrowseEnv = {
   ...readEnvFile(join(FASTBROWSE_DIR, '.env')),
   ...process.env,
 }
+
+const tokenHarborKey = fastbrowseEnv.TOKENHARBOR_API_KEY || ''
 const openCodeKey = fastbrowseEnv.OPENCODE_API_KEY
   || fastbrowseEnv.TYPESAFE_API_KEY
   || fastbrowseEnv.FASTBROWSE_LLM_API_KEY
   || ''
+
+// --- LLM -------------------------------------------------------------------
+if (!fastbrowseEnv.FASTBROWSE_LLM_BASE_URL && tokenHarborKey) {
+  fastbrowseEnv.FASTBROWSE_LLM_BASE_URL = 'https://tokenharbor.ai/v1'
+}
+fastbrowseEnv.FASTBROWSE_LLM_BASE_URL ||= 'https://opencode.ai/inference/openai/v1'
+const llmIsTokenHarbor = /tokenharbor/.test(fastbrowseEnv.FASTBROWSE_LLM_BASE_URL)
+if (!fastbrowseEnv.FASTBROWSE_LLM_MODEL) {
+  fastbrowseEnv.FASTBROWSE_LLM_MODEL = llmIsTokenHarbor
+    ? 'deepseek-v4.1-flash:free'
+    : 'deepseek-v4.1-flash'
+}
+if (!fastbrowseEnv.FASTBROWSE_LLM_API_KEY) {
+  fastbrowseEnv.FASTBROWSE_LLM_API_KEY = llmIsTokenHarbor ? tokenHarborKey : openCodeKey
+}
+
+// --- Jev -------------------------------------------------------------------
 if (openCodeKey) {
   fastbrowseEnv.OPENCODE_API_KEY = openCodeKey
   fastbrowseEnv.TYPESAFE_API_KEY = openCodeKey
-  fastbrowseEnv.FASTBROWSE_LLM_API_KEY = openCodeKey
 }
-fastbrowseEnv.FASTBROWSE_LLM_BASE_URL ||= 'https://opencode.ai/inference/openai/v1'
-fastbrowseEnv.FASTBROWSE_LLM_MODEL ||= 'deepseek-v4.1-flash'
 fastbrowseEnv.FASTBROWSE_JEV_SOURCE ||= 'typesafe'
 fastbrowseEnv.FASTBROWSE_JEV_BASE_URL ||= 'https://opencode.ai/inference/systemone'
-fastbrowseEnv.FASTBROWSE_JEV_MODEL ||= 'jev-1.13'
-// Une seule clé, un seul fournisseur : aucun repli silencieux.
+// Jev est gratuit par défaut ; un modèle payant reste sélectionnable par variable.
+fastbrowseEnv.FASTBROWSE_JEV_MODEL ||= 'jev-1.13-free'
+
 delete fastbrowseEnv.OPENROUTER_API_KEY
 delete fastbrowseEnv.AI_GATEWAY_API_KEY
 delete fastbrowseEnv.BROWSER_USE_API_KEY
 
-if (!openCodeKey) {
-  console.error('OPENCODE_API_KEY manquante. Renseigne le secret GitHub OPENCODE_API_KEY.')
+if (!fastbrowseEnv.FASTBROWSE_LLM_API_KEY) {
+  console.error('Aucune clé LLM : renseigne le secret TOKENHARBOR_API_KEY ou OPENCODE_API_KEY.')
   process.exit(2)
 }
+if (!fastbrowseEnv.OPENCODE_API_KEY) {
+  console.error('Aucune clé Jev : renseigne le secret OPENCODE_API_KEY.')
+  process.exit(2)
+}
+
+// Un modèle gratuit rapporte un coût de 0 ; fastbrowse refuse alors d'appliquer un
+// plafond en dollars. On n'ajoute `--max-dollars` que pour un modèle payant.
+const LLM_MODEL_IS_FREE = /free/i.test(fastbrowseEnv.FASTBROWSE_LLM_MODEL || '')
 
 const goals = readJson(GOALS_FILE, {})
 const manifest = readJson(MANIFEST_FILE, null)
@@ -282,8 +311,9 @@ function runFastbrowseOnce(c, goal) {
     '--json',
     '--local',
     '--max-steps', String(maxSteps),
-    '--max-dollars', String(maxDollars),
   ]
+  // Plafond en dollars seulement si le modèle le permet (modèle payant).
+  if (!LLM_MODEL_IS_FREE && maxDollars > 0) args.push('--max-dollars', String(maxDollars))
   if (goal.authorize === true) args.push('--authorize')
 
   return new Promise((resolvePromise) => {

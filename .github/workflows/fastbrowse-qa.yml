@@ -5,8 +5,12 @@ name: fastbrowse QA — TestDino-like run
 # un LLM pour planifier/lire la page. Le runner du dépôt garde la propriété
 # des assertions : le verdict de fastbrowse ne suffit pas à valider un cas.
 #
-# Une seule clé est nécessaire : le secret GitHub OPENCODE_API_KEY.
-# Elle alimente le LLM et Jev via OpenCode Console.
+# Deux clés, deux rôles :
+#   - LLM (planification/lecture) : secret TOKENHARBOR_API_KEY, modèle gratuit
+#     `deepseek-v4.1-flash:free` sur https://tokenharbor.ai/v1 ;
+#   - Jev (System One)            : secret OPENCODE_API_KEY, modèle gratuit
+#     `jev-1.13-free` sur https://opencode.ai/inference/systemone.
+# Un modèle gratuit ne rapporte aucun coût : le plafond en dollars est inutile.
 
 on:
   workflow_dispatch:
@@ -107,18 +111,24 @@ jobs:
             -H "x-run-token: $RUN_TOKEN" "$MANIFEST_URL" -o run_manifest.json
           jq -e '.cases | type == "array" and length > 0' run_manifest.json >/dev/null
 
-      - name: Vérifier la clé OpenCode
+      - name: Vérifier les clés LLM et Jev
         shell: bash
         env:
+          TOKENHARBOR_API_KEY: ${{ secrets.TOKENHARBOR_API_KEY }}
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         run: |
           set -euo pipefail
-          if [ -z "${OPENCODE_API_KEY:-}" ]; then
-            echo "::error::Secret GitHub OPENCODE_API_KEY absent. Ajoute la clé OpenCode Console dans Settings → Secrets and variables → Actions."
+          if [ -z "${TOKENHARBOR_API_KEY:-}" ]; then
+            echo "::error::Secret GitHub TOKENHARBOR_API_KEY absent (LLM gratuit). Ajoute-le dans Settings → Secrets and variables → Actions."
             exit 1
           fi
+          if [ -z "${OPENCODE_API_KEY:-}" ]; then
+            echo "::error::Secret GitHub OPENCODE_API_KEY absent (Jev). Ajoute-le dans Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+          echo "::add-mask::$TOKENHARBOR_API_KEY"
           echo "::add-mask::$OPENCODE_API_KEY"
-          echo "✓ Clé OpenCode lue depuis le secret GitHub"
+          echo "✓ Clés LLM (TokenHarbor) et Jev (OpenCode) lues depuis les secrets GitHub"
 
       - name: Déterminer l'URL cible
         id: target
@@ -151,19 +161,21 @@ jobs:
           RUN_TOKEN: ${{ inputs.run_token }}
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           TYPESAFE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
-          FASTBROWSE_LLM_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
-          FASTBROWSE_LLM_BASE_URL: https://opencode.ai/inference/openai/v1
-          FASTBROWSE_LLM_MODEL: deepseek-v4.1-flash
+          # LLM gratuit via TokenHarbor ; Jev gratuit via OpenCode.
+          TOKENHARBOR_API_KEY: ${{ secrets.TOKENHARBOR_API_KEY }}
+          FASTBROWSE_LLM_API_KEY: ${{ secrets.TOKENHARBOR_API_KEY }}
+          FASTBROWSE_LLM_BASE_URL: https://tokenharbor.ai/v1
+          FASTBROWSE_LLM_MODEL: deepseek-v4.1-flash:free
           FASTBROWSE_JEV_SOURCE: typesafe
           FASTBROWSE_JEV_BASE_URL: https://opencode.ai/inference/systemone
-          FASTBROWSE_JEV_MODEL: jev-1.13
+          FASTBROWSE_JEV_MODEL: jev-1.13-free
           FASTBROWSE_CHROME: /usr/bin/google-chrome
           FASTBROWSE_CASE_TIMEOUT_MS: "120000"
           FASTBROWSE_DELAY_MS: "2000"
           FASTBROWSE_RETRIES: "1"
           FASTBROWSE_RETRY_DELAY_MS: "15000"
           FASTBROWSE_MAX_STEPS: "25"
-          FASTBROWSE_MAX_DOLLARS: "0.10"
+          FASTBROWSE_MAX_DOLLARS: "0"
           GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         shell: bash
         run: |
