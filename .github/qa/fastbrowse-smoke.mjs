@@ -9,10 +9,14 @@
  * lance deux objectifs fixes sur une URL publique et affiche le JSON fastbrowse.
  *
  * Fournisseur (variable `SMOKE_PROVIDER`) :
- *   - `opencode`   : Jev via `https://opencode.ai/inference/systemone`, LLM via
- *                    `https://opencode.ai/inference/openai/v1` (clé `OPENCODE_API_KEY`) ;
- *   - `openrouter` : Jev et LLM via OpenRouter (clé `OPENROUTER_API_KEY`) ;
- *   - `auto` (défaut) : opencode si sa clé est présente, sinon openrouter.
+ *   - `tokenharbor` : LLM via `https://tokenharbor.ai/v1` (clé `TOKENHARBOR_API_KEY`),
+ *                     Jev via OpenCode (clé `OPENCODE_API_KEY`) — la combinaison
+ *                     recommandée : TokenHarbor fournit le LLM, Jev reste chez OpenCode ;
+ *   - `opencode`    : Jev via `https://opencode.ai/inference/systemone`, LLM via
+ *                     `https://opencode.ai/inference/openai/v1` (clé `OPENCODE_API_KEY`) ;
+ *   - `openrouter`  : Jev et LLM via OpenRouter (clé `OPENROUTER_API_KEY`) ;
+ *   - `auto` (défaut) : tokenharbor si sa clé est présente (avec OpenCode pour
+ *                     Jev), sinon opencode, sinon openrouter.
  *
  * Sortie : `qa-smoke.json` (réponses brutes + résumé). Code de sortie 1 seulement
  * si aucun objectif n'a produit de JSON exploitable — un échec de contenu est un
@@ -39,6 +43,7 @@ const MAX_DOLLARS = Number(process.env.SMOKE_MAX_DOLLARS || '0.10')
 const PROVIDER = (() => {
   const requested = (process.env.SMOKE_PROVIDER || 'auto').toLowerCase()
   if (requested !== 'auto') return requested
+  if (process.env.TOKENHARBOR_API_KEY && process.env.OPENCODE_API_KEY) return 'tokenharbor'
   if (process.env.OPENCODE_API_KEY) return 'opencode'
   if (process.env.OPENROUTER_API_KEY) return 'openrouter'
   return 'none'
@@ -51,7 +56,20 @@ function buildEnv() {
   delete env.AI_GATEWAY_API_KEY
   delete env.BROWSER_USE_API_KEY
 
-  if (PROVIDER === 'opencode') {
+  if (PROVIDER === 'tokenharbor') {
+    // LLM chez TokenHarbor (proxy neutre OpenAI-compatible).
+    env.TOKENHARBOR_API_KEY = process.env.TOKENHARBOR_API_KEY || ''
+    env.FASTBROWSE_LLM_API_KEY = process.env.TOKENHARBOR_API_KEY || ''
+    env.FASTBROWSE_LLM_BASE_URL = process.env.SMOKE_LLM_BASE_URL || 'https://tokenharbor.ai/v1'
+    env.FASTBROWSE_LLM_MODEL = process.env.SMOKE_LLM_MODEL || 'deepseek-v4.1-flash:free'
+    // Jev reste chez OpenCode (System One).
+    const key = process.env.OPENCODE_API_KEY || ''
+    env.OPENCODE_API_KEY = key
+    env.TYPESAFE_API_KEY = key
+    env.FASTBROWSE_JEV_SOURCE = 'typesafe'
+    env.FASTBROWSE_JEV_BASE_URL = 'https://opencode.ai/inference/systemone'
+    env.FASTBROWSE_JEV_MODEL = process.env.SMOKE_JEV_MODEL || 'jev-1.13-free'
+  } else if (PROVIDER === 'opencode') {
     const key = process.env.OPENCODE_API_KEY || ''
     env.OPENCODE_API_KEY = key
     env.TYPESAFE_API_KEY = key
@@ -181,12 +199,13 @@ function runOnce(goal) {
 console.log(`fastbrowse smoke — cible ${TARGET_URL}`)
 console.log(`fournisseur : ${PROVIDER}`)
 console.log(
-  `clés : OPENCODE_API_KEY=${process.env.OPENCODE_API_KEY ? 'oui' : 'non'}, ` +
+  `clés : TOKENHARBOR_API_KEY=${process.env.TOKENHARBOR_API_KEY ? 'oui' : 'non'}, ` +
+  `OPENCODE_API_KEY=${process.env.OPENCODE_API_KEY ? 'oui' : 'non'}, ` +
   `OPENROUTER_API_KEY=${process.env.OPENROUTER_API_KEY ? 'oui' : 'non'}`,
 )
 
 if (PROVIDER === 'none') {
-  console.error('Aucune clé (OPENCODE_API_KEY ou OPENROUTER_API_KEY). Rien à tester.')
+  console.error('Aucune clé (TOKENHARBOR_API_KEY, OPENCODE_API_KEY ou OPENROUTER_API_KEY). Rien à tester.')
   process.exit(2)
 }
 
