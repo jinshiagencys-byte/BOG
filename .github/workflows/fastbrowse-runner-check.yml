@@ -1,0 +1,156 @@
+name: fastbrowse runner check — plan local
+
+# Vérifie le runner QA réel (fastbrowse-runner.mjs) de bout en bout, sans Supabase :
+# un plan local de deux cas, la même chaîne Jev + LLM que les vrais runs, et les
+# vidéos. Sert à valider un changement de fournisseur (par exemple le passage à
+# « hybrid » quand le quota gratuit de TokenHarbor est épuisé) avant de lancer un
+# run depuis l'application.
+#
+# Déclenchement manuel : aucun champ obligatoire.
+
+on:
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: "Fournisseur LLM : hybrid | tokenharbor | openrouter | opencode"
+        required: false
+        default: "hybrid"
+      url:
+        description: "URL cible"
+        required: false
+        default: "https://odjafrik.com"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fastbrowse-runner-check
+  cancel-in-progress: false
+
+jobs:
+  runner-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Installer Google Chrome et ffmpeg
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          # ffmpeg encode les vidéos de session (option --record de fastbrowse).
+          sudo apt-get install -y ffmpeg
+          if ! command -v google-chrome >/dev/null 2>&1 \
+            && ! command -v google-chrome-stable >/dev/null 2>&1; then
+            sudo apt-get install -y wget ca-certificates
+            wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
+              -O /tmp/google-chrome.deb
+            sudo apt-get install -y /tmp/google-chrome.deb
+          fi
+          if command -v google-chrome >/dev/null 2>&1; then
+            google-chrome --version
+          else
+            google-chrome-stable --version
+          fi
+          ffmpeg -version | head -1
+
+      - name: Installer uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Construire fastbrowse
+        shell: bash
+        env:
+          FASTBROWSE_COMMIT: e46c12a14e5cf5034e69eb7d5a21856eb0f0dc27
+          UV_PYTHON: "3.13"
+        run: |
+          set -euo pipefail
+          rm -rf _fastbrowse
+          mkdir _fastbrowse
+          cd _fastbrowse
+          git init -q
+          git remote add origin https://github.com/agent-labs-dev/fastbrowse.git
+          git fetch -q --depth 1 origin "$FASTBROWSE_COMMIT"
+          git checkout -q FETCH_HEAD
+          uv sync --frozen --no-dev
+          test -x .venv/bin/fastbrowse
+          echo "✓ $(.venv/bin/fastbrowse --version)"
+
+      - name: Écrire le plan local (2 cas)
+        shell: bash
+        env:
+          TARGET: ${{ inputs.url || 'https://odjafrik.com' }}
+        run: |
+          set -euo pipefail
+          cat > plan-cases.json <<'JSON'
+          [
+            {
+              "code": "TC-101",
+              "title": "une page d'erreur 404 explicite",
+              "steps": [
+                { "n": 1, "action": "Ouvrir /nonexistent-page-xyz", "expected": "la page indique explicitement une erreur 404" }
+              ]
+            },
+            {
+              "code": "TC-103",
+              "title": "au moins un produit dans le catalogue",
+              "steps": [
+                { "n": 1, "action": "Ouvrir /products", "expected": "au moins un produit est affiché" }
+              ]
+            }
+          ]
+          JSON
+          echo "🎯 Cible : $TARGET · cas : $(jq length plan-cases.json)"
+
+      - name: Exécuter le runner
+        id: qa
+        env:
+          FASTBROWSE_CLI: ${{ github.workspace }}/_fastbrowse/.venv/bin/fastbrowse
+          FASTBROWSE_DIR: ${{ github.workspace }}/_fastbrowse
+          PLAN_FILE: ${{ github.workspace }}/plan-cases.json
+          QA_OUTPUT: ${{ github.workspace }}/qa_result.json
+          QA_CACHE_DIR: ${{ github.workspace }}/.qa-cache
+          FASTBROWSE_RECORD_DIR: ${{ github.workspace }}/recordings
+          TARGET_URL: ${{ inputs.url || 'https://odjafrik.com' }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          TYPESAFE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          TOKENHARBOR_API_KEY: ${{ secrets.TOKENHARBOR_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          FASTBROWSE_LLM_PROVIDER: ${{ inputs.provider || 'hybrid' }}
+          FASTBROWSE_CHROME: /usr/bin/google-chrome
+          FASTBROWSE_CASE_TIMEOUT_MS: "180000"
+          FASTBROWSE_DELAY_MS: "2000"
+          FASTBROWSE_RETRIES: "0"
+          FASTBROWSE_MAX_STEPS: "20"
+          FASTBROWSE_MAX_DOLLARS: "0"
+          GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          set +e
+          node .github/qa/fastbrowse-runner.mjs
+          CODE=$?
+          echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
+          if [ "$CODE" -ne 0 ]; then
+            echo "::warning::Le runner s'est terminé avec le code $CODE"
+          fi
+
+      - name: Archiver les preuves
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fastbrowse-runner-check
+          path: |
+            qa_result.json
+            plan-cases.json
+            .qa-cache/
+            recordings/*.mp4
+          if-no-files-found: warn
+          retention-days: 14

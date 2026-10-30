@@ -90,20 +90,54 @@ const openCodeKey = fastbrowseEnv.OPENCODE_API_KEY
   || fastbrowseEnv.TYPESAFE_API_KEY
   || fastbrowseEnv.FASTBROWSE_LLM_API_KEY
   || ''
+const openRouterKey = fastbrowseEnv.OPENROUTER_API_KEY || ''
+
+// Fournisseur LLM : `auto` (défaut historique), `tokenharbor`, `opencode`,
+// `openrouter` ou `hybrid` (LLM gratuit OpenRouter + Jev gratuit OpenCode).
+// `hybrid` est le repli quand le quota gratuit de TokenHarbor est épuisé.
+const LLM_PROVIDER = (fastbrowseEnv.FASTBROWSE_LLM_PROVIDER || 'auto').toLowerCase()
+const PROVIDER_DEFAULTS = {
+  tokenharbor: {
+    base: 'https://tokenharbor.ai/v1',
+    model: 'deepseek-v4.1-flash:free',
+    key: tokenHarborKey,
+    jevSource: 'typesafe',
+    jevBase: 'https://opencode.ai/inference/systemone',
+    jevModel: 'jev-1.13-free',
+  },
+  opencode: {
+    base: 'https://opencode.ai/inference/openai/v1',
+    model: 'deepseek-v4.1-flash',
+    key: openCodeKey,
+    jevSource: 'typesafe',
+    jevBase: 'https://opencode.ai/inference/systemone',
+    jevModel: 'jev-1.13-free',
+  },
+  openrouter: {
+    base: 'https://openrouter.ai/api/v1',
+    model: 'nvidia/nemotron-3.5-super-vl:free',
+    key: openRouterKey,
+    jevSource: 'openrouter',
+    jevBase: 'https://openrouter.ai/api/v1',
+    jevModel: 'jev-1.13',
+  },
+  hybrid: {
+    base: 'https://openrouter.ai/api/v1',
+    model: 'nvidia/nemotron-3.5-super-vl:free',
+    key: openRouterKey,
+    jevSource: 'typesafe',
+    jevBase: 'https://opencode.ai/inference/systemone',
+    jevModel: 'jev-1.13-free',
+  },
+}
+const provider = PROVIDER_DEFAULTS[LLM_PROVIDER]
+  ?? (tokenHarborKey ? PROVIDER_DEFAULTS.tokenharbor : PROVIDER_DEFAULTS.opencode)
 
 // --- LLM -------------------------------------------------------------------
-if (!fastbrowseEnv.FASTBROWSE_LLM_BASE_URL && tokenHarborKey) {
-  fastbrowseEnv.FASTBROWSE_LLM_BASE_URL = 'https://tokenharbor.ai/v1'
-}
-fastbrowseEnv.FASTBROWSE_LLM_BASE_URL ||= 'https://opencode.ai/inference/openai/v1'
-const llmIsTokenHarbor = /tokenharbor/.test(fastbrowseEnv.FASTBROWSE_LLM_BASE_URL)
-if (!fastbrowseEnv.FASTBROWSE_LLM_MODEL) {
-  fastbrowseEnv.FASTBROWSE_LLM_MODEL = llmIsTokenHarbor
-    ? 'deepseek-v4.1-flash:free'
-    : 'deepseek-v4.1-flash'
-}
+fastbrowseEnv.FASTBROWSE_LLM_BASE_URL ||= provider.base
+fastbrowseEnv.FASTBROWSE_LLM_MODEL ||= provider.model
 if (!fastbrowseEnv.FASTBROWSE_LLM_API_KEY) {
-  fastbrowseEnv.FASTBROWSE_LLM_API_KEY = llmIsTokenHarbor ? tokenHarborKey : openCodeKey
+  fastbrowseEnv.FASTBROWSE_LLM_API_KEY = provider.key
 }
 
 // --- Jev -------------------------------------------------------------------
@@ -111,17 +145,18 @@ if (openCodeKey) {
   fastbrowseEnv.OPENCODE_API_KEY = openCodeKey
   fastbrowseEnv.TYPESAFE_API_KEY = openCodeKey
 }
-fastbrowseEnv.FASTBROWSE_JEV_SOURCE ||= 'typesafe'
-fastbrowseEnv.FASTBROWSE_JEV_BASE_URL ||= 'https://opencode.ai/inference/systemone'
+fastbrowseEnv.FASTBROWSE_JEV_SOURCE ||= provider.jevSource
+fastbrowseEnv.FASTBROWSE_JEV_BASE_URL ||= provider.jevBase
 // Jev est gratuit par défaut ; un modèle payant reste sélectionnable par variable.
-fastbrowseEnv.FASTBROWSE_JEV_MODEL ||= 'jev-1.13-free'
+fastbrowseEnv.FASTBROWSE_JEV_MODEL ||= provider.jevModel
 
-delete fastbrowseEnv.OPENROUTER_API_KEY
 delete fastbrowseEnv.AI_GATEWAY_API_KEY
 delete fastbrowseEnv.BROWSER_USE_API_KEY
+// La clé OpenRouter ne reste que si le fournisseur retenu l'utilise.
+if (!/openrouter/i.test(fastbrowseEnv.FASTBROWSE_LLM_BASE_URL)) delete fastbrowseEnv.OPENROUTER_API_KEY
 
 if (!fastbrowseEnv.FASTBROWSE_LLM_API_KEY) {
-  console.error('Aucune clé LLM : renseigne le secret TOKENHARBOR_API_KEY ou OPENCODE_API_KEY.')
+  console.error('Aucune clé LLM : renseigne TOKENHARBOR_API_KEY, OPENROUTER_API_KEY ou OPENCODE_API_KEY.')
   process.exit(2)
 }
 if (!fastbrowseEnv.OPENCODE_API_KEY) {
@@ -763,6 +798,8 @@ function stepResults(c, status, verdict, run, goal) {
 
 const startedAt = new Date()
 const results = []
+console.log(`\n🤖 LLM : ${fastbrowseEnv.FASTBROWSE_LLM_MODEL} · ${fastbrowseEnv.FASTBROWSE_LLM_BASE_URL}`)
+console.log(`🧭 Jev : ${fastbrowseEnv.FASTBROWSE_JEV_MODEL} · ${fastbrowseEnv.FASTBROWSE_JEV_SOURCE} · ${fastbrowseEnv.FASTBROWSE_JEV_BASE_URL}`)
 const probeBrowser = await openProbe(FASTBROWSE_DIR)
 if (probeBrowser.available) {
   console.log(`\n🔎 Sonde de page prête (${probeBrowser.executablePath})`)
