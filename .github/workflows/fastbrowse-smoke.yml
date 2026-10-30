@@ -16,7 +16,7 @@ on:
         required: false
         default: "https://odjafrik.com/"
       provider:
-        description: "Fournisseur : auto | tokenharbor | opencode | openrouter"
+        description: "Fournisseur : auto | tokenharbor | hybrid | opencode | openrouter"
         required: false
         default: "auto"
       jev_model:

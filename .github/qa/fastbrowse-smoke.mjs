@@ -15,6 +15,9 @@
  *   - `opencode`    : Jev via `https://opencode.ai/inference/systemone`, LLM via
  *                     `https://opencode.ai/inference/openai/v1` (clé `OPENCODE_API_KEY`) ;
  *   - `openrouter`  : Jev et LLM via OpenRouter (clé `OPENROUTER_API_KEY`) ;
+ *   - `hybrid`      : LLM via un modèle **gratuit** d'OpenRouter (clé
+ *                     `OPENROUTER_API_KEY`), Jev via OpenCode gratuit — le repli
+ *                     quand le quota gratuit de TokenHarbor est épuisé ;
  *   - `auto` (défaut) : tokenharbor si sa clé est présente (avec OpenCode pour
  *                     Jev), sinon opencode, sinon openrouter.
  *
@@ -84,6 +87,19 @@ function buildEnv() {
     env.FASTBROWSE_JEV_SOURCE = 'typesafe'
     env.FASTBROWSE_JEV_BASE_URL = 'https://opencode.ai/inference/systemone'
     env.FASTBROWSE_JEV_MODEL = process.env.SMOKE_JEV_MODEL || 'jev-1.13'
+  } else if (PROVIDER === 'hybrid') {
+    // LLM gratuit chez OpenRouter (le compte n'a pas de crédits, mais les modèles
+    // `:free` passent), Jev gratuit chez OpenCode. Repli quand TokenHarbor est à sec.
+    env.OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || ''
+    env.FASTBROWSE_LLM_API_KEY = process.env.OPENROUTER_API_KEY || ''
+    env.FASTBROWSE_LLM_BASE_URL = 'https://openrouter.ai/api/v1'
+    env.FASTBROWSE_LLM_MODEL = process.env.SMOKE_LLM_MODEL || 'nvidia/nemotron-3.5-super-vl:free'
+    const key = process.env.OPENCODE_API_KEY || ''
+    env.OPENCODE_API_KEY = key
+    env.TYPESAFE_API_KEY = key
+    env.FASTBROWSE_JEV_SOURCE = 'typesafe'
+    env.FASTBROWSE_JEV_BASE_URL = 'https://opencode.ai/inference/systemone'
+    env.FASTBROWSE_JEV_MODEL = process.env.SMOKE_JEV_MODEL || 'jev-1.13-free'
   } else if (PROVIDER === 'openrouter') {
     env.OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || ''
     env.FASTBROWSE_JEV_SOURCE = 'openrouter'
