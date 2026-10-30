@@ -215,6 +215,7 @@ jobs:
         env:
           REQUESTED_MODEL: ${{ inputs.model }}
           TOKENHARBOR_KEY: ${{ secrets.TOKENHARBOR_API_KEY }}
+          OPENROUTER_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENCODE_KEY: ${{ secrets.OPENCODE_API_KEY }}
           BASE_URL_VAR: ${{ vars.ANTIGRAVITY_LLM_BASE_URL }}
           MODEL_VAR: ${{ vars.ANTIGRAVITY_LLM_MODEL }}
@@ -229,7 +230,7 @@ jobs:
           elif [ -n "${OPENCODE_KEY:-}" ]; then
             BASE_URL="https://opencode.ai/inference/v1"
           else
-            echo "::error::Aucune clé LLM : renseigne le secret TOKENHARBOR_API_KEY ou OPENCODE_API_KEY."
+            echo "::error::Aucune clé LLM : renseigne le secret TOKENHARBOR_API_KEY, OPENROUTER_API_KEY ou OPENCODE_API_KEY."
             exit 1
           fi
           MODEL="${REQUESTED_MODEL:-${MODEL_VAR:-}}"
@@ -258,9 +259,33 @@ jobs:
             big-pickle|big\ pickle|pickle) MODEL="big-pickle" ;;
             beam|beam-free) MODEL="beam-free" ;;
           esac
+          # Le quota gratuit de TokenHarbor peut être épuisé (HTTP 429). On sonde
+          # le fournisseur choisi et, s'il refuse, on bascule sur le modèle
+          # gratuit d'OpenRouter : le reste du pipeline ne change pas.
+          PROVIDER="custom"
+          case "$BASE_URL" in
+            *tokenharbor*) PROVIDER="tokenharbor" ;;
+            *openrouter*) PROVIDER="openrouter" ;;
+            *opencode*) PROVIDER="opencode" ;;
+          esac
+          if [ "$PROVIDER" = "tokenharbor" ] && [ -n "${OPENROUTER_KEY:-}" ]; then
+            CODE=$(curl -sS --max-time 25 -o /tmp/probe_th.json -w '%{http_code}' \
+              "$BASE_URL/chat/completions" \
+              -H "authorization: Bearer $TOKENHARBOR_KEY" -H 'content-type: application/json' \
+              -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],\"max_tokens\":4}" \
+              2>/dev/null || echo 000)
+            if [ "${CODE:-000}" != "200" ]; then
+              echo "::warning::TokenHarbor HTTP ${CODE:-000} sur $MODEL — repli sur OpenRouter (modèle gratuit)"
+              head -c 300 /tmp/probe_th.json 2>/dev/null || true; echo
+              PROVIDER="openrouter"
+              BASE_URL="https://openrouter.ai/api/v1"
+              MODEL="nvidia/nemotron-3.5-super-vl:free"
+            fi
+          fi
+          echo "provider=$PROVIDER" >> "$GITHUB_OUTPUT"
           echo "base_url=$BASE_URL" >> "$GITHUB_OUTPUT"
           echo "name=$MODEL" >> "$GITHUB_OUTPUT"
-          echo "🧠 Fournisseur LLM : $BASE_URL"
+          echo "🧠 Fournisseur LLM : $PROVIDER · $BASE_URL"
           echo "🧠 Modèle : $MODEL"
 
       - name: Démarrer le proxy Gemini -> LLM
@@ -269,7 +294,7 @@ jobs:
           LLM_MODEL: ${{ steps.model.outputs.name }}
           LLM_TITLE_MODEL: ${{ steps.model.outputs.name }}
           LLM_SAFETY_MODEL: ${{ steps.model.outputs.name }}
-          LLM_API_KEY: ${{ secrets.TOKENHARBOR_API_KEY || secrets.OPENCODE_API_KEY }}
+          LLM_API_KEY: ${{ steps.model.outputs.provider == 'openrouter' && secrets.OPENROUTER_API_KEY || (steps.model.outputs.provider == 'opencode' && secrets.OPENCODE_API_KEY || secrets.TOKENHARBOR_API_KEY || secrets.OPENCODE_API_KEY) }}
         shell: bash
         run: |
           set -euo pipefail
