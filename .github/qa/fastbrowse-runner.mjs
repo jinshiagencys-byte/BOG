@@ -13,7 +13,7 @@
  * (for example: "the category page lists products").
  */
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { performance } from 'node:perf_hooks'
@@ -70,6 +70,11 @@ const RETRY_DELAY_MS = Number(env('FASTBROWSE_RETRY_DELAY_MS', '15000'))
 const MAX_STEPS = Number(env('FASTBROWSE_MAX_STEPS', '25'))
 const MAX_DOLLARS = Number(env('FASTBROWSE_MAX_DOLLARS', '0.10'))
 const ONLY = env('CASE_CODES', '').split(',').map((value) => value.trim()).filter(Boolean)
+// Vidéo par cas (screencast Chrome -> ffmpeg) ; `FASTBROWSE_RECORD=0` la désactive.
+const RECORD_DIR = env('FASTBROWSE_RECORD', '1') === '0'
+  ? null
+  : resolve(env('FASTBROWSE_RECORD_DIR', join(ROOT, 'recordings')))
+if (RECORD_DIR) mkdirSync(RECORD_DIR, { recursive: true })
 
 // Deux fournisseurs distincts, chacun sa clé :
 //   - LLM (planification/lecture) : TokenHarbor par défaut, modèle gratuit `*-free` ;
@@ -315,6 +320,9 @@ function runFastbrowseOnce(c, goal) {
   // Plafond en dollars seulement si le modèle le permet (modèle payant).
   if (!LLM_MODEL_IS_FREE && maxDollars > 0) args.push('--max-dollars', String(maxDollars))
   if (goal.authorize === true) args.push('--authorize')
+  // Vidéo de la session pour ce cas (nom de fichier assaini).
+  const safeCode = String(c.code ?? goal.label ?? 'case').replace(/[^A-Za-z0-9._-]/g, '-')
+  if (RECORD_DIR) args.push('--record', join(RECORD_DIR, `${safeCode}.mp4`))
 
   return new Promise((resolvePromise) => {
     const started = performance.now()
@@ -352,6 +360,11 @@ function runFastbrowseOnce(c, goal) {
         parseError,
         stderr: stderr.slice(-6000),
         cached: false,
+        recordings: RECORD_DIR
+          ? readdirSync(RECORD_DIR)
+            .filter((f) => f === `${safeCode}.mp4` || f === `${safeCode}.plain.mp4`)
+            .map((f) => join(RECORD_DIR, f))
+          : [],
       }
       if (json) {
         mkdirSync(CACHE_DIR, { recursive: true })
@@ -769,6 +782,7 @@ try {
     const verdict = await verify(c, goal, run, probeBrowser)
     console.log(`  ${verdict.status.toUpperCase()} (${verdict.reason}) · ${run.durationMs} ms · ${run.json?.steps?.length ?? '?'} étapes`)
     console.log(`  ${verdict.actual.slice(0, 700)}`)
+    if (run.recordings?.length) console.log(`  vidéo : ${run.recordings.join(', ')}`)
     const webmcpTools = verdict.probe?.webmcp?.tools ?? []
     if (webmcpTools.length) {
       console.log(`  WebMCP : ${webmcpTools.length} outil(s) — ${webmcpTools.map((tool) => tool.name).join(', ')}`)
@@ -784,6 +798,7 @@ try {
       status: verdict.status,
       note: verdict.note.slice(0, 4000),
       duration_ms: run.durationMs,
+      recordings: run.recordings ?? [],
       steps: stepResults(c, verdict.status, verdict, run, goal),
     })
   }
@@ -795,7 +810,7 @@ const counts = { passed: 0, failed: 0, blocked: 0, skipped: 0 }
 for (const result of results) counts[result.status] = (counts[result.status] ?? 0) + 1
 const payload = {
   run_id: env('QA_RUN_ID') || null,
-  model: env('FASTBROWSE_REPORT_MODEL', 'opencode/deepseek-v4.1-flash+jev-1.13'),
+  model: env('FASTBROWSE_REPORT_MODEL', 'tokenharbor/deepseek-v4.1-flash:free+opencode/jev-1.13-free'),
   executor: 'fastbrowse',
   started_at: startedAt.toISOString(),
   finished_at: new Date().toISOString(),
