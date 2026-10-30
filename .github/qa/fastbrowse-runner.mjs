@@ -845,9 +845,22 @@ try {
 
 const counts = { passed: 0, failed: 0, blocked: 0, skipped: 0 }
 for (const result of results) counts[result.status] = (counts[result.status] ?? 0) + 1
+
+// Étiquette du modèle réellement utilisé (le rapport ne doit pas annoncer
+// TokenHarbor quand le run a tourné sur OpenRouter).
+function providerLabel(baseUrl) {
+  const url = String(baseUrl || '')
+  if (/tokenharbor/i.test(url)) return 'tokenharbor'
+  if (/openrouter/i.test(url)) return 'openrouter'
+  if (/opencode/i.test(url)) return 'opencode'
+  return 'custom'
+}
+const modelLabel = `${providerLabel(fastbrowseEnv.FASTBROWSE_LLM_BASE_URL)}/${fastbrowseEnv.FASTBROWSE_LLM_MODEL}`
+  + `+${providerLabel(fastbrowseEnv.FASTBROWSE_JEV_BASE_URL)}/${fastbrowseEnv.FASTBROWSE_JEV_MODEL}`
+
 const payload = {
   run_id: env('QA_RUN_ID') || null,
-  model: env('FASTBROWSE_REPORT_MODEL', 'tokenharbor/deepseek-v4.1-flash:free+opencode/jev-1.13-free'),
+  model: env('FASTBROWSE_REPORT_MODEL', modelLabel),
   executor: 'fastbrowse',
   started_at: startedAt.toISOString(),
   finished_at: new Date().toISOString(),
