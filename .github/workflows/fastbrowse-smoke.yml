@@ -13,7 +13,7 @@ on:
       url:
         description: "URL publique de test"
         required: false
-        default: "https://example.com"
+        default: "https://www.iana.org/"
       provider:
         description: "Fournisseur : auto | tokenharbor | opencode | openrouter"
         required: false
@@ -106,7 +106,7 @@ jobs:
           FASTBROWSE_DIR: ${{ github.workspace }}/_fastbrowse
           FASTBROWSE_CHROME: /usr/bin/google-chrome
           QA_OUTPUT: ${{ github.workspace }}/qa-smoke.json
-          SMOKE_URL: ${{ github.event.inputs.url || 'https://example.com' }}
+          SMOKE_URL: ${{ github.event.inputs.url || 'https://www.iana.org/' }}
           SMOKE_PROVIDER: ${{ github.event.inputs.provider || 'auto' }}
           SMOKE_JEV_MODEL: ${{ github.event.inputs.jev_model }}
           SMOKE_LLM_MODEL: ${{ github.event.inputs.llm_model }}

@@ -34,7 +34,7 @@ const ROOT = resolve(process.env.QA_ROOT || join(HERE, '..', '..'))
 const FASTBROWSE_DIR = resolve(process.env.FASTBROWSE_DIR || join(ROOT, '..', 'fastbrowse'))
 const LOCAL_CLI = join(FASTBROWSE_DIR, '.venv', 'bin', 'fastbrowse')
 const FASTBROWSE_CLI = process.env.FASTBROWSE_CLI || (existsSync(LOCAL_CLI) ? LOCAL_CLI : 'fastbrowse')
-const TARGET_URL = process.env.SMOKE_URL || 'https://example.com'
+const TARGET_URL = process.env.SMOKE_URL || 'https://www.iana.org/'
 const OUT = resolve(process.env.QA_OUTPUT || join(ROOT, 'qa-smoke.json'))
 const CASE_TIMEOUT_MS = Number(process.env.SMOKE_TIMEOUT_MS || '180000')
 const MAX_STEPS = Number(process.env.SMOKE_MAX_STEPS || '12')
@@ -97,12 +97,12 @@ const GOALS = [
   {
     name: 'heading',
     goal: `Va sur cette page et donne le texte exact du titre principal (h1).`,
-    check: (json) => /example\s*domain/i.test(JSON.stringify(json)),
+    check: (json) => /internet\s+assigned\s+numbers\s+authority/i.test(JSON.stringify(json)),
   },
   {
     name: 'navigate',
-    goal: `Clique sur le lien « More information... » et donne l'URL finale obtenue.`,
-    check: (json) => /iana\.org/i.test(JSON.stringify(json)),
+    goal: `Clique sur le lien « Domains » du menu principal et donne l'URL finale obtenue.`,
+    check: (json) => /iana\.org\/domains/i.test(JSON.stringify(json)),
   },
 ]
 
