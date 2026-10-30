@@ -85,6 +85,48 @@ const GOALS = [
   },
 ]
 
+// --- Sondes indépendantes : Jev seul, puis LLM seul. -------------------------
+// Elles distinguent une panne de la chaîne d'un simple manque de crédits, et
+// n'appellent pas de navigateur.
+
+async function probeJev() {
+  const base = env.FASTBROWSE_JEV_BASE_URL || 'https://openrouter.ai/api/v1'
+  const url = `${base.replace(/\/$/, '')}/v1/systemone`
+  const key = env.TYPESAFE_API_KEY || env.OPENROUTER_API_KEY || ''
+  const model = env.FASTBROWSE_JEV_MODEL || 'jev-1.13'
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        state: 'Le ciel est bleu et dégagé.',
+        questions: { is_blue: { type: 'noul', instructions: 'Is the sky described as blue?' } },
+      }),
+    })
+    return { url, model, status: res.status, ok: res.ok, body: (await res.text()).slice(0, 400) }
+  } catch (error) {
+    return { url, model, status: 0, ok: false, body: String(error.message) }
+  }
+}
+
+async function probeLlm() {
+  const base = env.FASTBROWSE_LLM_BASE_URL || 'https://openrouter.ai/api/v1'
+  const url = `${base.replace(/\/$/, '')}/chat/completions`
+  const key = env.FASTBROWSE_LLM_API_KEY || env.OPENROUTER_API_KEY || ''
+  const model = env.FASTBROWSE_LLM_MODEL || 'google/gemini-3.8-flash'
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model, messages: [{ role: 'user', content: 'dis juste: bonjour' }], max_tokens: 8 }),
+    })
+    return { url, model, status: res.status, ok: res.ok, body: (await res.text()).slice(0, 400) }
+  } catch (error) {
+    return { url, model, status: 0, ok: false, body: String(error.message) }
+  }
+}
+
 function runOnce(goal) {
   const args = [
     goal.goal,
@@ -148,8 +190,34 @@ if (PROVIDER === 'none') {
   process.exit(2)
 }
 
+console.log('\n— sonde Jev (System One) —')
+const jev = await probeJev()
+console.log(`  HTTP ${jev.status} · ${jev.model} · ${jev.url}`)
+console.log(`  ${jev.ok ? 'OK' : 'ÉCHEC'} : ${jev.body.replace(/\s+/g, ' ').slice(0, 220)}`)
+
+console.log('\n— sonde LLM (chat completions) —')
+const llm = await probeLlm()
+console.log(`  HTTP ${llm.status} · ${llm.model} · ${llm.url}`)
+console.log(`  ${llm.ok ? 'OK' : 'ÉCHEC'} : ${llm.body.replace(/\s+/g, ' ').slice(0, 220)}`)
+
 const results = []
 for (const goal of GOALS) {
+  if (!llm.ok) {
+    console.log(`\n▶ ${goal.name} — ignoré (LLM indisponible : HTTP ${llm.status})`)
+    results.push({
+      name: goal.name,
+      goal: goal.goal,
+      exitCode: null,
+      timedOut: false,
+      durationMs: 0,
+      json: null,
+      parseError: null,
+      stderr: `LLM indisponible (HTTP ${llm.status})`,
+      checkOk: false,
+      skipped: true,
+    })
+    continue
+  }
   console.log(`\n▶ ${goal.name} — ${goal.goal}`)
   const run = await runOnce(goal)
   results.push(run)
@@ -169,6 +237,7 @@ const summary = {
   provider: PROVIDER,
   target: TARGET_URL,
   date: new Date().toISOString(),
+  probes: { jev, llm },
   goals: results.length,
   exploitable: payable,
   ok: results.filter((run) => run.checkOk).length,
@@ -189,7 +258,13 @@ const summary = {
 }
 writeFileSync(OUT, `${JSON.stringify(summary, null, 2)}\n`)
 console.log(`\nRésumé écrit dans ${OUT}`)
-console.log(JSON.stringify({ provider: summary.provider, exploitable: summary.exploitable, ok: summary.ok }))
+console.log(JSON.stringify({
+  provider: summary.provider,
+  jev: jev.status,
+  llm: llm.status,
+  exploitable: summary.exploitable,
+  ok: summary.ok,
+}))
 
 // Échec dur uniquement si la chaîne n'a produit aucun résultat exploitable.
 process.exit(payable === 0 ? 1 : 0)
